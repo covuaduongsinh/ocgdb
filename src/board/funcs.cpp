@@ -16,6 +16,7 @@
 
 #ifdef _WIN32
 
+#include <sys/stat.h>
 //#include <windows.h>
 //#include <direct.h>
 //#include <stdlib.h> // for full path

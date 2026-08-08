@@ -33,9 +33,11 @@
     <ClCompile Include="..\src\board\chesstypes.cpp" />
     <ClCompile Include="..\src\board\funcs.cpp" />
     <ClCompile Include="..\src\builder.cpp" />
+    <ClCompile Include="..\src\core.cpp" />
     <ClCompile Include="..\src\dbcore.cpp" />
     <ClCompile Include="..\src\dbread.cpp" />
     <ClCompile Include="..\src\duplicate.cpp" />
+    <ClCompile Include="..\src\epdbuilder.cpp" />
     <ClCompile Include="..\src\exporter.cpp" />
     <ClCompile Include="..\src\extract.cpp" />
     <ClCompile Include="..\src\main.cpp" />
@@ -67,6 +69,7 @@
     <ClInclude Include="..\src\board\funcs.h" />
     <ClInclude Include="..\src\board\types.h" />
     <ClInclude Include="..\src\builder.h" />
+    <ClInclude Include="..\src\core.h" />
     <ClInclude Include="..\src\dbcore.h" />
     <ClInclude Include="..\src\dbread.h" />
     <ClInclude Include="..\src\duplicate.h" />

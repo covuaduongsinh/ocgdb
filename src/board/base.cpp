@@ -8,6 +8,7 @@
  * or copy at http://opensource.org/licenses/MIT)
  */
 
+#include <algorithm>
 #include <chrono>
 #include <map>
 #include <sstream>
