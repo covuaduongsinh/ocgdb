@@ -12,7 +12,7 @@
 
   const CREATE_OPTS = [
     'moves', 'moves1', 'moves2', 'acceptnewtags', 'discardcomments',
-    'discardsites', 'discardnoelo', 'discardfen', 'reseteco', 'nobot', 'bot',
+    'discardsites', 'discardnoelo', 'discardfen', 'reseteco', 'nobot', 'bot', 'index',
   ];
 
   let pollTimer = null;
@@ -336,7 +336,7 @@
     host.innerHTML =
       '<label class="field admin-task-select">' + t().t('admin.task') +
         '<select name="task">' +
-          ['create', 'merge', 'export', 'dup', 'bench', 'query'].map((k) =>
+          ['create', 'merge', 'export', 'dup', 'bench', 'query', 'index', 'optimize'].map((k) =>
             '<option value="' + k + '"' + (k === task ? ' selected' : '') + '>' + t().t('admin.task.' + k) + '</option>').join('') +
         '</select></label>' +
       '<form class="admin-task-form" data-task="' + task + '">' + taskFieldsHtml(task) + '</form>' +
@@ -439,6 +439,12 @@
         '<option value="printall">printall</option>' +
         '</select></label>');
       parts.push(text('report', 'report', false));
+    } else if (task === 'index') {
+      parts.push(area('db', 'dbIn', true));
+    } else if (task === 'optimize') {
+      parts.push(area('db', 'dbIn', true));
+      parts.push(check('vacuum', 'vacuum'));
+      parts.push(check('integrity', 'integrity'));
     }
 
     parts.push('<div class="field field-actions"><button type="submit" class="btn btn-primary">' + t().t('admin.submitJob') + '</button></div>');
@@ -482,6 +488,14 @@
       params.pql = val('pql');
       if (val('printFormat')) params.printFormat = val('printFormat');
       if (val('report')) params.report = val('report');
+    } else if (task === 'index') {
+      params.db = joinLines(val('db'));
+    } else if (task === 'optimize') {
+      params.db = joinLines(val('db'));
+      const opts = [];
+      if (checked('vacuum')) opts.push('vacuum');
+      if (checked('integrity')) opts.push('integrity');
+      if (opts.length) params.opts = opts.join(',');
     }
     return params;
   }
@@ -528,6 +542,16 @@
       parts.push('-db', q(val('db') || '<db>'), '-q', q(val('pql') || '<pql>'));
       if (val('printFormat')) parts.push('-o', val('printFormat'));
       if (val('report')) parts.push('-r', q(val('report')));
+    } else if (task === 'index') {
+      parts.push('-index');
+      splitLines(val('db')).forEach((p) => parts.push('-db', q(p)));
+    } else if (task === 'optimize') {
+      parts.push('-optimize');
+      splitLines(val('db')).forEach((p) => parts.push('-db', q(p)));
+      const opts = [];
+      if (checked('vacuum')) opts.push('vacuum');
+      if (checked('integrity')) opts.push('integrity');
+      if (opts.length) parts.push('-o', opts.join(','));
     }
     parts.push('-progress');
     return parts.join(' ');

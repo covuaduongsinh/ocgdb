@@ -20,6 +20,7 @@
 
 #include "board/chess.h"
 #include "builder.h"
+#include "indexer.h"
 
 
 using namespace ocgdb;
@@ -156,13 +157,20 @@ void Builder::create()
     // completing
     {
         updateInfoTable();
-        
+
         if (playerInsertStatement) delete playerInsertStatement;
         playerInsertStatement = nullptr;
         if (eventInsertStatement) delete eventInsertStatement;
         eventInsertStatement = nullptr;
         if (siteInsertStatement) delete siteInsertStatement;
         siteInsertStatement = nullptr;
+
+        if ((paraRecord.optionFlag & create_flag_index) && mDb) {
+            std::cout << "Building indexes..." << std::endl;
+            int created = 0, skipped = 0;
+            buildStandardIndexes(*mDb, created, skipped);
+            std::cout << "  created " << created << ", already existed " << skipped << std::endl;
+        }
     }
 }
 

@@ -19,6 +19,13 @@ AddGame::AddGame()
 
 void AddGame::runTask()
 {
+    // Core::startTime (core.h) is otherwise only set by the -q/-bench path
+    // (Search::openDB(), search.cpp) before each db/pgn is processed; left
+    // at its default-constructed value here, printStats()'s
+    // "now - startTime" came out as a bogus multi-hour duration for what
+    // was actually a sub-second -merge.
+    startTime = getNow();
+
     assert(!paraRecord.dbPaths.empty());
     auto dbPath = paraRecord.dbPaths.front();
 

@@ -45,11 +45,16 @@ void Search::runTask()
     
     boardCallback = [=](const bslib::BoardCore* board, const bslib::PgnRecord* record) -> bool {
         assert(board);
-        
-        for(int i = 1, n = board->getHistListSize(); i <= n; i++) {
+
+        // histList[i] holds the position right after move i+1 was made (0
+        // indexed by ply), so iterating over every position in the game
+        // means i = 0 .. n-1 inclusive. The last entry is refetched via
+        // posToBitboards() rather than trusting histList[n-1].bitboardVec,
+        // matching the original intent here.
+        for(int i = 0, n = board->getHistListSize(); i < n; i++) {
             std::vector<uint64_t> bitboardVec;
 
-            if (i < n) {
+            if (i < n - 1) {
                 auto hist = board->_getHistPointerAt(i);
                 assert(hist && !hist->bitboardVec.empty());
                 bitboardVec = hist->bitboardVec;
@@ -98,36 +103,14 @@ void Search::runTask()
 
     
     for(auto && _query : paraRecord.queries) {
-        query = _query;
+        query = Parser::stripLineComments(_query);
+        // Reset per query (not just once before this loop) -- otherwise
+        // #succ reported after query N includes every match from queries
+        // 1..N-1 too, which is exactly what makes -bench's canned queries
+        // (setupForBench() below) print identical, accumulated #succ
+        // numbers for unrelated queries.
+        succCount = 0;
 
-        // remove comments by //
-        if (query.find("//") != std::string::npos) {
-            while(true) {
-                auto p = query.find("//");
-                if (p == std::string::npos) {
-                    break;
-                }
-                
-                auto q = p + 2;
-                for(; q < query.size(); q++) {
-                    auto ch = query.at(q);
-                    if (ch == '\n') {
-                        q++;
-                        break;
-                    }
-                }
-                
-                auto s = query.substr(0, p);
-                if (q >= query.size()) {
-                    query = s;
-                    break;
-                } else {
-                    auto s2 = query.substr(q);
-                    query = s + s2;
-                }
-            }
-        }
-        
         bslib::Funcs::trim(query);
 
         if (query.empty()) {
@@ -155,6 +138,7 @@ void Search::runTask()
                 gameCnt = commentCnt = 0;
                 eventCnt = playerCnt = siteCnt = 1;
                 errCnt = 0;
+                succCount = 0;
                 readADb(dbPath, queryString);
             }
         }

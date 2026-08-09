@@ -19,6 +19,8 @@
 #include "extract.h"
 #include "addgame.h"
 #include "server.h"
+#include "indexer.h"
+#include "optimizer.h"
 
 #include "board/chess.h"
 
@@ -73,6 +75,16 @@ void runTask(ocgdb::ParaRecord& param)
             core = new ocgdb::WebServer;
             break;
         }
+        case ocgdb::Task::index:
+        {
+            core = new ocgdb::Indexer;
+            break;
+        }
+        case ocgdb::Task::optimize:
+        {
+            core = new ocgdb::Optimizer;
+            break;
+        }
 
         default:
             break;
@@ -120,7 +132,8 @@ int main(int argc, const char * argv[]) {
             progressMode = true;
             continue;
         }
-        if (str == "-create" || str == "-merge" || str == "-export" || str == "-dup" || str == "-server") {
+        if (str == "-create" || str == "-merge" || str == "-export" || str == "-dup" || str == "-server"
+            || str == "-index" || str == "-optimize") {
             if (str == "-create") {
                 paraRecord.task = ocgdb::Task::create;
             } else if (str == "-merge") {
@@ -131,6 +144,10 @@ int main(int argc, const char * argv[]) {
                 paraRecord.task = ocgdb::Task::dup;
             } else if (str == "-server") {
                 paraRecord.task = ocgdb::Task::server;
+            } else if (str == "-index") {
+                paraRecord.task = ocgdb::Task::index;
+            } else if (str == "-optimize") {
+                paraRecord.task = ocgdb::Task::optimize;
             }
             if (oldTask != ocgdb::Task::none) {
                 errCnt++;
@@ -207,7 +224,11 @@ int main(int argc, const char * argv[]) {
                 paraRecord.task = ocgdb::Task::getgame;
                 paraRecord.gameIDVec.push_back(std::atoi(argv[++i]));
             }
-            if (oldTask != ocgdb::Task::none) {
+            // -q and -g are meant to be repeated (see usage text above: "repeat
+            // to add multi queries/IDs"), so repeating the *same* task here is
+            // not a conflict -- only flag it when a different task was already
+            // selected (e.g. "-create ... -q ...").
+            if (oldTask != ocgdb::Task::none && oldTask != paraRecord.task) {
                 errCnt++;
                 printConflictedTasks(oldTask, paraRecord.task);
                 break;
@@ -254,6 +275,8 @@ void print_usage()
     " -q <query>            querying positions, repeat to add multi queries, works with -db, -pgn\n" \
     " -g <id>               get game with game ID numbers (repeat to add multi IDs), works with -db, -pgn\n" \
     " -server               start a local web UI/API server for browsing a database, works with -db\n" \
+    " -index                build secondary SQL indexes on Games/Comments to speed up filtering/sorting, works with -db\n" \
+    " -optimize             run SQLite maintenance (ANALYZE always; VACUUM/integrity_check via -o), works with -db\n" \
     " -pgn <file>           PGN game database file, repeat to add multi files\n" \
     " -db <file>            database file, extension should be .ocgdb.db3, repeat to add multi files\n" \
     " -r <file>             report file, works with -g, -q, -dup\n" \
@@ -286,6 +309,9 @@ void print_usage()
     "    remove             remove duplicate games (for checking duplicates)\n" \
     "    nobot              Lichess: ignore BOT games (for creating a database)\n" \
     "    bot                Lichess: count games with BOT (for creating a database)\n" \
+    "    index              also build secondary SQL indexes right after creating (for creating)\n" \
+    "    vacuum             also run VACUUM (for -optimize; rewrites the whole file)\n" \
+    "    integrity          also run PRAGMA integrity_check (for -optimize)\n" \
     "\n" \
     "Examples:\n" \
     " ocgdb -create -pgn big.pgn -db big.ocgdb.db3 -cpu 4 -o moves\n" \
@@ -297,7 +323,9 @@ void print_usage()
     " ocgdb -db big.ocgdb.db3 -dup -o remove,printall\n" \
     " ocgdb -db big.ocgdb.db3 -dup -o remove -r report.txt\n" \
     " ocgdb -server -db big.ocgdb.db3 -port 3456\n" \
-    " ocgdb -server -db big.ocgdb.db3 -port 3456 -root D:\\chess -admintoken mysecret\n"
+    " ocgdb -server -db big.ocgdb.db3 -port 3456 -root D:\\chess -admintoken mysecret\n" \
+    " ocgdb -index -db big.ocgdb.db3\n" \
+    " ocgdb -optimize -db big.ocgdb.db3 -o vacuum,integrity\n"
     "\n" \
     "Main functions/features:\n" \
     "1. create an SQLite database from multi PGN files\n" \
@@ -306,7 +334,9 @@ void print_usage()
     "4. get/display PGN games/FEN strings with game IDs from an SQLite database\n" \
     "5. find duplicates/embedded games from multi SQLite databases\n" \
     "6. query games from multi SQLite databases or PGN files, using PQL (Position Query Language)\n" \
-    "7. serve a local web UI/API to browse a database, view games and run PQL queries\n"
+    "7. serve a local web UI/API to browse a database, view games and run PQL queries\n" \
+    "8. build secondary SQL indexes on a database to speed up filtering/sorting\n" \
+    "9. run routine SQLite maintenance (ANALYZE/VACUUM/integrity_check) on a database\n"
     ;
 
     std::cerr << str << std::endl;

@@ -150,6 +150,28 @@ bool ParaRecord::isValid() const
             break;
         }
 
+        case Task::index:
+        {
+            if (dbPaths.empty()) {
+                errorString = "Must have at least a database (.db3) path. Mising or wrong parameter -db";
+                return false;
+            }
+
+            ok = true;
+            break;
+        }
+
+        case Task::optimize:
+        {
+            if (dbPaths.empty()) {
+                errorString = "Must have at least a database (.db3) path. Mising or wrong parameter -db";
+                return false;
+            }
+
+            ok = true;
+            break;
+        }
+
         default:
             break;
     }
@@ -168,6 +190,7 @@ static const std::map<std::string, int> optionNameMap = {
     {"discardnoelo", 6},
     {"discardfen", 7},
     {"reseteco", 8},
+    {"index", 9}, // for -create: build the standard secondary indexes right after creating
 
     // query
     {"printall", 10},
@@ -179,6 +202,10 @@ static const std::map<std::string, int> optionNameMap = {
 
     {"nobot", 20},
     {"bot", 21},
+
+    // optimize
+    {"vacuum", 22},
+    {"integrity", 23},
 };
 
 std::string ParaRecord::toString(Task task)
@@ -192,6 +219,8 @@ std::string ParaRecord::toString(Task task)
         "get game",
         "duplicate",
         "server",
+        "index",
+        "optimize",
         "none"
     };
         
