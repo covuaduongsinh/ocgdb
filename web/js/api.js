@@ -110,6 +110,9 @@
     query(pql, limit) {
       return getJson('/api/query', { pql, limit }).then((r) => r.body);
     },
+    tree(fen) {
+      return getJson('/api/tree', { fen }).then((r) => r.body);
+    },
 
     // ---- admin (control plane) -----------------------------------------
     hasAdminToken() { return !!getAdminToken(); },

@@ -183,6 +183,21 @@ bool ParaRecord::isValid() const
             break;
         }
 
+        case Task::tree:
+        {
+            if (dbPaths.empty()) {
+                errorString = "Must have at least a database (.db3) path. Mising or wrong parameter -db";
+                return false;
+            }
+            if (treeDepth <= 0) {
+                errorString = "-depth must be a positive number of plies";
+                return false;
+            }
+
+            ok = true;
+            break;
+        }
+
         default:
             break;
     }
@@ -233,6 +248,7 @@ std::string ParaRecord::toString(Task task)
         "index",
         "optimize",
         "material",
+        "tree",
         "none"
     };
         

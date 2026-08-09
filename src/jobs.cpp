@@ -301,6 +301,25 @@ bool ocgdb::buildJobArgv(const std::string& task,
         return true;
     }
 
+    if (task == "tree") {
+        auto dbs = splitMulti(getP(params, "db"), '|');
+        if (dbs.empty()) { err = "at least one database is required"; return false; }
+        for (auto&& p : dbs) {
+            if (!checkPath(pathFilter, p, err)) return false;
+            if (!checkExists(p, err)) return false;
+        }
+
+        argv.push_back("-tree");
+        for (auto&& p : dbs) { argv.push_back("-db"); argv.push_back(p); }
+        auto depth = getP(params, "depth");
+        if (!depth.empty()) { argv.push_back("-depth"); argv.push_back(depth); }
+
+        if (dbs.size() == 1) writeTargetPath = dbs.front();
+        paramsText = "build opening tree on " + std::to_string(dbs.size()) + " database(s)" +
+                     (depth.empty() ? std::string() : " (depth " + depth + ")");
+        return true;
+    }
+
     if (task == "bench") {
         auto db = getP(params, "db");
         if (db.empty()) { err = "a database path is required"; return false; }

@@ -48,6 +48,7 @@ enum class Task
     index,      // create secondary SQL indexes on Games/Comments (see indexer.h)
     optimize,   // ANALYZE/integrity_check/VACUUM/PRAGMA optimize (see optimizer.h)
     material,   // build GameMaterial PQL pre-filter table (see material.h)
+    tree,       // build OpeningTree table (see tree.h)
     none,
 };
 
@@ -117,6 +118,8 @@ public:
     
     int64_t gameNumberLimit = 0xffffffffffffULL; // stop when the number of games reached that limit
     int64_t resultNumberLimit = 0xffffffffffffULL; // stop when the number of results reached that limit
+
+    int treeDepth = 20; // for -tree: how many plies deep to index, via -depth
 
     mutable std::string errorString;
     

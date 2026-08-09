@@ -177,6 +177,7 @@
       'admin.task.index': 'Tạo index tăng tốc',
       'admin.task.optimize': 'Bảo trì CSDL (ANALYZE/VACUUM)',
       'admin.task.material': 'Tạo bộ lọc trước cho PQL (chất liệu quân)',
+      'admin.task.tree': 'Xây cây khai cuộc',
       'admin.previewLabel': 'Xem trước dòng lệnh:',
       'admin.submitJob': 'Chạy',
       'admin.jobSubmitted': 'Đã tạo tác vụ #{id}.',
@@ -204,6 +205,7 @@
       'admin.f.printFormatNone': '(mặc định)',
       'admin.f.vacuum': 'Chạy VACUUM (nén lại file, cần dung lượng đĩa trống tương đương)',
       'admin.f.integrity': 'Chạy kiểm tra toàn vẹn (integrity_check, quét toàn bộ file)',
+      'admin.f.depth': 'Độ sâu (số nước, mặc định 20)',
 
       'admin.jobsSection': 'Tác vụ đang chạy / lịch sử',
       'admin.clearFinished': 'Dọn tác vụ đã xong',
@@ -394,6 +396,7 @@
       'admin.task.index': 'Build speed-up indexes',
       'admin.task.optimize': 'Database maintenance (ANALYZE/VACUUM)',
       'admin.task.material': 'Build PQL pre-filter (material signature)',
+      'admin.task.tree': 'Build opening tree',
       'admin.previewLabel': 'Command preview:',
       'admin.submitJob': 'Run',
       'admin.jobSubmitted': 'Job #{id} submitted.',
@@ -421,6 +424,7 @@
       'admin.f.printFormatNone': '(default)',
       'admin.f.vacuum': 'Run VACUUM (rewrites the file, needs free disk space roughly equal to its size)',
       'admin.f.integrity': 'Run integrity_check (reads the entire file)',
+      'admin.f.depth': 'Depth (plies, default 20)',
 
       'admin.jobsSection': 'Running / job history',
       'admin.clearFinished': 'Clear finished jobs',
