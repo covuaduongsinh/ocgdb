@@ -99,6 +99,7 @@ ThreadRecord* Core::getThreadRecord()
 void Core::resetCnts()
 {
     gameCnt = eventCnt = playerCnt = siteCnt = commentCnt = epdCnt = itemCnt = 0;
-    blockCnt = processedPgnSz = processedCnt = workingGameIdx = errCnt = succCount = 0;
+    blockCnt = processedPgnSz = processedCnt = workingGameIdx = errCnt = 0;
+    succCount = 0;
     pgnTotalSz = 0;
 }

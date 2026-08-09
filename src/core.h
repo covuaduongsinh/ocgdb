@@ -12,6 +12,7 @@
 #define OCGDB_CORE_H
 
 #include <stdio.h>
+#include <atomic>
 #include <unordered_map>
 
 #include "3rdparty/threadpool/thread_pool.hpp"
@@ -54,7 +55,14 @@ protected:
 
     /// For stats
     std::chrono::steady_clock::time_point startTime;
-    int64_t blockCnt, processedPgnSz, processedCnt, workingGameIdx, errCnt, succCount;
+    int64_t blockCnt, processedPgnSz, processedCnt, workingGameIdx, errCnt;
+    // Incremented from worker threads (Search::processAGameWithAThread,
+    // WebServer::processAGameWithAThread) while the main thread
+    // concurrently reads it (readADb()'s resultNumberLimit check) --
+    // a plain int64_t here was a real data race with observed lost
+    // updates (identical -cpu 4 queries returning counts off by one
+    // between runs). Must stay atomic.
+    std::atomic<int64_t> succCount;
     // Total size (bytes) of the PGN file(s) being read, if any -- set by
     // PgnRead before its read loop (pgnread.cpp) so printStats() can turn
     // processedPgnSz into a real percentage for -progress. Zero/unused for
