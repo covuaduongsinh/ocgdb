@@ -44,6 +44,7 @@ enum class Task
     bench,
     getgame,
     dup,
+    server,
     none,
 };
 
@@ -95,6 +96,13 @@ public:
     Task task = Task::none;
     int cpuNumber = -1, limitElo = 0, limitLen = 0;
     std::vector<int> gameIDVec;
+
+    // for -server
+    int port = 3456;
+    std::string webDir;
+    std::string adminToken;   // -admintoken; auto-generated if empty (see WebServer::runTask)
+    std::string adminDbPath;  // -admindb; defaults next to the running executable
+    std::string rootDir;      // -root; when set, every path a job/API touches must be inside it
     
     int64_t gameNumberLimit = 0xffffffffffffULL; // stop when the number of games reached that limit
     int64_t resultNumberLimit = 0xffffffffffffULL; // stop when the number of results reached that limit

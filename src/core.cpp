@@ -12,6 +12,8 @@
 
 using namespace ocgdb;
 
+extern bool progressMode;
+
 thread_pool* Core::pool = nullptr;
 
 Core::Core()
@@ -64,7 +66,7 @@ void Core::createPool()
 void Core::printStats() const
 {
     int64_t elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(getNow() - startTime).count() + 1;
-    
+
     std::lock_guard<std::mutex> dolock(printMutex);
 
     std::cout << "#games: " << gameCnt
@@ -72,6 +74,19 @@ void Core::printStats() const
               << bslib::Funcs::secondToClockString(static_cast<int>(elapsed / 1000), ":")
               << ", speed: " << gameCnt * 1000ULL / elapsed
               << " games/s";
+
+    if (progressMode) {
+        // Machine-readable progress line for JobManager (jobs.cpp), which
+        // runs this program as a child process for background jobs
+        // submitted from the -server control plane. bytes/total are only
+        // meaningful while reading PGN files (create/merge); left at 0
+        // otherwise, in which case the UI falls back to showing gameCnt
+        // without a percentage.
+        std::cout << "\n@@PROGRESS games=" << gameCnt
+                   << " elapsed=" << elapsed
+                   << " bytes=" << processedPgnSz
+                   << " total=" << pgnTotalSz;
+    }
 }
 
 ThreadRecord* Core::getThreadRecord()
@@ -85,4 +100,5 @@ void Core::resetCnts()
 {
     gameCnt = eventCnt = playerCnt = siteCnt = commentCnt = epdCnt = itemCnt = 0;
     blockCnt = processedPgnSz = processedCnt = workingGameIdx = errCnt = succCount = 0;
+    pgnTotalSz = 0;
 }

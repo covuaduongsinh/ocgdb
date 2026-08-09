@@ -232,7 +232,7 @@ Completed!
 
 ## 7. Nhật ký chạy thử thật
 
-Dữ liệu mẫu: `carlsen.ocgdb.db3` (2851 ván của Magnus Carlsen, tải từ repo mẫu chính thức [nguyenpham/ocgdb-samples](https://github.com/nguyenpham/ocgdb-samples), 839.680 byte, nước đi lưu dạng `Moves` text).
+Dữ liệu mẫu: `carlsen.ocgdb.db3` (2851 ván của Magnus Carlsen, tải từ repo mẫu chính thức [nguyenpham/ocgdb-samples](https://github.com/nguyenpham/ocgdb-samples), 839.680 byte, nước đi lưu dạng `Moves2` BLOB — không phải `Moves` text; bản `Moves` TEXT là `roundtrip.ocgdb.db3` được tạo lại ở mục 7.6).
 
 ### 7.0. Usage (không tham số)
 
@@ -403,3 +403,82 @@ projects\x64\Release\ocgdb.exe -bench -db build\samples\carlsen.ocgdb.db3 -cpu 4
 ```
 
 Toàn bộ binary, object file và CSDL mẫu nằm trong `build/` (đã có trong `.gitignore`, không ảnh hưởng `git status`). Hai thay đổi duy nhất trong mã nguồn được commit là các portability fix ở mục 6.1 (`base.cpp`, `funcs.cpp`) và bổ sung 2 file còn thiếu vào `projects/ocgdb.vcxproj` ở mục 6.2 — không có thay đổi hành vi nào khác.
+
+## 10. Máy chủ web / bảng điều khiển (`-server`)
+
+Nhiệm vụ `-server` (thêm sau các nhiệm vụ gốc ở mục 5, không có trong `README.md` gốc của upstream) biến `ocgdb.exe` thành một **máy chủ HTTP cục bộ** vừa phục vụ giao diện web trực quan (thư mục `web/`, HTML/CSS/JS thuần, không build step), vừa là **bảng điều khiển điều hành** cho phép chạy mọi nhiệm vụ CLI khác (`-create/-merge/-export/-dup/-bench/-q`) từ trình duyệt, có hàng đợi, tiến độ trực tiếp, log, và huỷ giữa chừng.
+
+### 10.1. Kiến trúc
+
+- **`src/server.{h,cpp}`** — lớp `WebServer : public DbRead`, dùng thư viện nhúng sẵn `src/3rdparty/httplib/httplib.h` (cpp-httplib, MIT, ~740KB, chỉ include trong đúng một file `.cpp` để không kéo dài thời gian biên dịch). Phục vụ hai nhóm API:
+  - `/api/*` — đọc CSDL "đang active" (duyệt ván, xem chi tiết, PQL, thống kê). CSDL active là **đổi được lúc chạy**, không cố định vào tham số `-db` lúc khởi động.
+  - `/api/admin/*` — quản lý danh sách CSDL đã đăng ký, đổi CSDL active, và toàn bộ hàng đợi tác vụ. Mọi route này bắt buộc header `X-OCGDB-Token`.
+- **`src/admin.{h,cpp}`** — `AdminStore`: kho trạng thái bền vững bằng một file SQLite **riêng** (`ocgdb-admin.db3`, mặc định cạnh file `.exe`, đổi bằng `-admindb`), lưu danh sách CSDL đã đăng ký, lịch sử tác vụ, và log từng dòng của mỗi tác vụ.
+- **`src/jobs.{h,cpp}`** — `JobManager`: hàng đợi một luồng worker, chạy tuần tự (không cho hai tác vụ ghi đồng thời). Mỗi tác vụ được ánh xạ sang một dòng lệnh `ocgdb <cờ nhiệm vụ> ...` theo bảng trắng cứng (`buildJobArgv()`), không bao giờ nối chuỗi shell từ input người dùng.
+- **`src/process.{h,cpp}`** — `ChildProcess`: chạy `ocgdb.exe` như **tiến trình con** thật sự (Windows: `CreatePipe` + `CreateProcessW`; POSIX: `pipe`+`fork`+`execv`), bắt stdout/stderr gộp làm log theo đúng thứ tự thời gian, huỷ được bằng `TerminateProcess`/`SIGTERM`. Chọn tiến trình con thay vì gọi thẳng `Builder`/`AddGame`... trong cùng tiến trình vì `Core::pool` là con trỏ **`static` dùng chung** ([src/core.cpp:15](src/core.cpp#L15)) — tạo một `Core` thứ hai trong lúc `WebServer` (chính nó cũng là một `Core`) đang chạy sẽ giẫm lên nhau.
+- Cờ CLI mới `-progress` khiến `Core::printStats()` ([src/core.cpp:64](src/core.cpp#L64)) in thêm một dòng máy đọc được: `@@PROGRESS games=N elapsed=Nms bytes=N total=N` — `JobManager` bắt dòng này bằng regex để cập nhật thanh tiến độ thật (phần trăm dựa trên dung lượng PGN đã đọc khi tạo/gộp CSDL).
+
+### 10.2. Đổi CSDL đang xem lúc đang chạy — an toàn với ghi đồng thời
+
+CSDL active được gói trong một struct `ActiveDb` (kết nối SQLite chỉ đọc + schema cache + cache thống kê), bảo vệ bằng `std::shared_mutex`:
+
+- Mọi route `/api/*` "nhẹ" lấy khoá đọc **không chặn** (`try_lock`); nếu đang có tác vụ ghi thì trả **HTTP 503** kèm `{"busy":true,"jobId":N}` ngay lập tức thay vì treo yêu cầu.
+- Ngay trước khi một tác vụ ghi (create/merge/dup xoá trùng) đụng đúng file đang active, `WebServer` đóng kết nối đọc của mình; ngay sau khi tác vụ xong, mở lại và xoá cache thống kê — đảm bảo lần đọc kế tiếp luôn thấy dữ liệu mới, không bao giờ đọc file dở dang.
+
+Đã kiểm chứng thật: đổi CSDL active giữa `carlsen.ocgdb.db3` (`Moves2`) và `roundtrip.ocgdb.db3` (`Moves`) qua `POST /api/admin/databases/activate` làm `/api/info` đổi đúng `moveField` tương ứng ngay lập tức; chạy một tác vụ `-merge` ghi vào đúng CSDL đang active xong, `/api/info` đọc lại khớp chính xác với kết quả một lệnh `-bench` độc lập chạy trực tiếp từ dòng lệnh (không qua cache nào) trên cùng file.
+
+### 10.3. Bảo mật
+
+- Mặc định chỉ lắng nghe `127.0.0.1` (như bản `-server` gốc), **không có cấu hình nào mở ra LAN**.
+- `-admintoken <t>` — không truyền thì tự sinh 32 ký tự hex ngẫu nhiên, in ra console kèm URL bấm được (`http://127.0.0.1:<port>/#admin?token=...`), đồng thời ghi ra `admin-token.txt` cạnh CSDL quản trị. Token bắt buộc trên **mọi** route `/api/admin/*` qua header `X-OCGDB-Token` — dùng header (không phải query/cookie) vì trình duyệt không tự gửi header tuỳ ý cross-origin mà không qua preflight CORS, và server này không bao giờ trả header cho phép CORS — đó là lớp chống CSRF chính.
+- `-root <dir>` (tuỳ chọn) — khi đặt, mọi đường dẫn CSDL/PGN/report nhận từ API phải nằm trong thư mục này sau khi chuẩn hoá (`std::filesystem::weakly_canonical`); đường dẫn còn `..` sau chuẩn hoá hoặc nằm ngoài `-root` bị từ chối. Đã kiểm chứng thật bằng `curl`: thêm một đường dẫn ngoài `-root`, và một đường dẫn dùng `..\..\` để thoát ra ngoài, cả hai đều bị chặn với lỗi rõ ràng; đường dẫn hợp lệ bên trong `-root` vẫn hoạt động bình thường.
+- "Gỡ đăng ký" một CSDL chỉ xoá khỏi danh sách quản lý, **không bao giờ xoá file trên đĩa**.
+
+### 10.4. Ví dụ chạy thật + log xác nhận
+
+```
+$ ocgdb.exe -server -db carlsen.ocgdb.db3 -db roundtrip.ocgdb.db3 -port 3456 -web web
+
+Starting web server...
+Web UI folder: web
+OCGDB web UI:  http://127.0.0.1:3456/
+Admin token:   b2a170aac373c2a074c42c9503ddf607
+Admin URL:     http://127.0.0.1:3456/#admin?token=b2a170aac373c2a074c42c9503ddf607
+(admin token also written to admin-token.txt)
+(listening on 127.0.0.1 only; press Ctrl+C to stop)
+```
+
+Không kèm token → 401; kèm đúng token → trạng thái máy chủ:
+
+```
+$ curl -H "X-OCGDB-Token: <token>" http://127.0.0.1:3456/api/admin/status
+{"version":"Beta 8","pid":13904,"uptimeMs":7559,"port":3456,"cpu":4,
+ "activeDb":{"path":"...carlsen.ocgdb.db3","open":true},
+ "busy":false,"activeJobId":null,
+ "jobCounts":{"queued":0,"running":0,"succeeded":0,"failed":0,"cancelled":0}}
+```
+
+Nộp một tác vụ `-merge` ghi trực tiếp vào PGN đã export trước đó, theo dõi tới khi xong:
+
+```
+$ curl -H "X-OCGDB-Token: <token>" -d "task=merge" -d "dbDest=carlsen.ocgdb.db3" \
+       -d "pgn=carlsen-export.pgn" http://127.0.0.1:3456/api/admin/jobs/submit
+{"id":2}
+
+$ curl -H "X-OCGDB-Token: <token>" http://127.0.0.1:3456/api/admin/jobs/2
+{"job":{"id":2,"task":"merge","state":"succeeded",
+ "cmdline":"ocgdb -merge -db carlsen.ocgdb.db3 -pgn carlsen-export.pgn -progress",
+ "progress":2102315,"progressTotal":2102315,"gameCnt":5701,"exitCode":0}}
+```
+
+`progress`/`progressTotal` là byte đã đọc/tổng byte của file PGN, lấy trực tiếp từ dòng `@@PROGRESS` — thanh tiến độ trên giao diện web là phần trăm thật, không phải hiệu ứng chờ vô định.
+
+### 10.5. Giao diện web (`web/`)
+
+Ứng dụng một trang (`web/index.html`), không build step, điều hướng qua hash (`#intro|#browse|#pql|#stats|#admin`), song ngữ Việt/Anh (nút chuyển, `web/js/i18n.js`), sáng/tối theo `prefers-color-scheme` hoặc chọn tay. Năm tab:
+
+1. **Giới thiệu** — bản trực quan hoá nội dung tài liệu này (sơ đồ schema, so sánh 3 kiểu mã hoá nước đi, demo PQL trên bàn cờ vẽ bằng SVG tự viết), lấy toàn bộ số liệu thật từ `/api/info`.
+2. **Duyệt CSDL** — lọc/sắp xếp/phân trang qua bảng `Games`.
+3. **Truy vấn PQL** — chạy PQL trực tiếp từ trình duyệt, trả về khớp/quét/thời gian.
+4. **Thống kê** — biểu đồ SVG tự vẽ (kết quả, theo năm, top ECO, phân bố Elo/số nước).
+5. **Quản trị** (mới, mục này) — đăng ký/quét/kích hoạt CSDL, form nộp tác vụ (đổi trường theo loại, có xem trước dòng lệnh thật sẽ chạy), bảng tác vụ cập nhật trực tiếp (polling 1.5 giây) với modal xem log/huỷ.

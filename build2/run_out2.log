@@ -1,0 +1,10 @@
+Open Chess Game Database Standard (OCGDB), (C) 2022 - version: Beta 8
+
+Thread count: 4
+Starting web server...
+Web UI folder: D:\code\ocgdb\web
+OCGDB web UI:  http://127.0.0.1:3459/
+Admin token:   10550c71adebc92cab02e506f38a647e
+Admin URL:     http://127.0.0.1:3459/#admin?token=10550c71adebc92cab02e506f38a647e
+(admin token also written to D:\code\ocgdb\build2\admin-token.txt)
+(listening on 127.0.0.1 only; press Ctrl+C to stop)

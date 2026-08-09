@@ -18,11 +18,13 @@
 #include "builder.h"
 #include "extract.h"
 #include "addgame.h"
+#include "server.h"
 
 #include "board/chess.h"
 
 void print_usage();
 extern bool debugMode;
+extern bool progressMode;
 
 void runTask(ocgdb::ParaRecord& param)
 {
@@ -64,6 +66,11 @@ void runTask(ocgdb::ParaRecord& param)
         case ocgdb::Task::merge:
         {
             core = new ocgdb::AddGame;
+            break;
+        }
+        case ocgdb::Task::server:
+        {
+            core = new ocgdb::WebServer;
             break;
         }
 
@@ -109,7 +116,11 @@ int main(int argc, const char * argv[]) {
             debugMode = true;
             continue;
         }
-        if (str == "-create" || str == "-merge" || str == "-export" || str == "-dup") {
+        if (str == "-progress") {
+            progressMode = true;
+            continue;
+        }
+        if (str == "-create" || str == "-merge" || str == "-export" || str == "-dup" || str == "-server") {
             if (str == "-create") {
                 paraRecord.task = ocgdb::Task::create;
             } else if (str == "-merge") {
@@ -118,6 +129,8 @@ int main(int argc, const char * argv[]) {
                 paraRecord.task = ocgdb::Task::export_;
             } else if (str == "-dup") {
                 paraRecord.task = ocgdb::Task::dup;
+            } else if (str == "-server") {
+                paraRecord.task = ocgdb::Task::server;
             }
             if (oldTask != ocgdb::Task::none) {
                 errCnt++;
@@ -163,6 +176,26 @@ int main(int argc, const char * argv[]) {
         }
         if (str == "-desc") {
             paraRecord.desc = std::string(argv[++i]);
+            continue;
+        }
+        if (str == "-port") {
+            paraRecord.port = std::atoi(argv[++i]);
+            continue;
+        }
+        if (str == "-web") {
+            paraRecord.webDir = std::string(argv[++i]);
+            continue;
+        }
+        if (str == "-admintoken") {
+            paraRecord.adminToken = std::string(argv[++i]);
+            continue;
+        }
+        if (str == "-admindb") {
+            paraRecord.adminDbPath = std::string(argv[++i]);
+            continue;
+        }
+        if (str == "-root") {
+            paraRecord.rootDir = std::string(argv[++i]);
             continue;
         }
         if (str == "-q" || str == "-g") {
@@ -220,6 +253,7 @@ void print_usage()
     " -bench                benchmarch querying games speed, works with -db\n" \
     " -q <query>            querying positions, repeat to add multi queries, works with -db, -pgn\n" \
     " -g <id>               get game with game ID numbers (repeat to add multi IDs), works with -db, -pgn\n" \
+    " -server               start a local web UI/API server for browsing a database, works with -db\n" \
     " -pgn <file>           PGN game database file, repeat to add multi files\n" \
     " -db <file>            database file, extension should be .ocgdb.db3, repeat to add multi files\n" \
     " -r <file>             report file, works with -g, -q, -dup\n" \
@@ -229,6 +263,12 @@ void print_usage()
     " -resultcount <n>      stop querying if the number of results above n (for querying)\n" \
     " -cpu <n>              number of threads, should <= total physical cores, omit it for using all cores\n" \
     " -desc \"<string>\"      a description to write to the table Info when creating a new database\n" \
+    " -port <n>             HTTP port for -server, default 3456, binds 127.0.0.1 only\n" \
+    " -web <dir>            folder with the web UI files for -server, default ./web\n" \
+    " -admintoken <t>       token required on X-OCGDB-Token for /api/admin/*, default: random, printed on start\n" \
+    " -admindb <file>       where -server keeps its own state (registered databases, job history), default: next to the exe\n" \
+    " -root <dir>           when set, -server rejects any database/PGN/report path outside this folder\n" \
+    " -progress             print a machine-readable \"@@PROGRESS ...\" line while running (used by -server's job runner)\n" \
     " -o [<options>,]       options, separated by commas\n" \
     "    moves              create text move field Moves\n" \
     "    moves1             create binary move field Moves, 1-byte encoding\n" \
@@ -255,7 +295,9 @@ void print_usage()
     " ocgdb -db big.ocgdb.db3 -cpu 4 -q \"fen[K7/N7/k7/8/3p4/8/N7/8 w - - 0 1]\"\n" \
     " ocgdb -db big.ocgdb.db3 -g 423 -g 4432\n" \
     " ocgdb -db big.ocgdb.db3 -dup -o remove,printall\n" \
-    " ocgdb -db big.ocgdb.db3 -dup -o remove -r report.txt\n"
+    " ocgdb -db big.ocgdb.db3 -dup -o remove -r report.txt\n" \
+    " ocgdb -server -db big.ocgdb.db3 -port 3456\n" \
+    " ocgdb -server -db big.ocgdb.db3 -port 3456 -root D:\\chess -admintoken mysecret\n"
     "\n" \
     "Main functions/features:\n" \
     "1. create an SQLite database from multi PGN files\n" \
@@ -263,7 +305,8 @@ void print_usage()
     "3. export multi SQLite databases to a PGN file\n" \
     "4. get/display PGN games/FEN strings with game IDs from an SQLite database\n" \
     "5. find duplicates/embedded games from multi SQLite databases\n" \
-    "6. query games from multi SQLite databases or PGN files, using PQL (Position Query Language)\n"
+    "6. query games from multi SQLite databases or PGN files, using PQL (Position Query Language)\n" \
+    "7. serve a local web UI/API to browse a database, view games and run PQL queries\n"
     ;
 
     std::cerr << str << std::endl;

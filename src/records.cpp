@@ -21,6 +21,10 @@
 #include "records.h"
 
 bool debugMode = false;
+// When set (-progress), Core::printStats() (core.cpp) additionally prints a
+// machine-readable "@@PROGRESS ..." line, consumed by JobManager (jobs.cpp)
+// when a task runs as a background job under -server.
+bool progressMode = false;
 
 
 using namespace ocgdb;
@@ -135,6 +139,17 @@ bool ParaRecord::isValid() const
             break;
         }
 
+        case Task::server:
+        {
+            if (dbPaths.empty()) {
+                errorString = "Must have at least a database (.db3) path. Mising or wrong parameter -db";
+                return false;
+            }
+
+            ok = true;
+            break;
+        }
+
         default:
             break;
     }
@@ -176,6 +191,7 @@ std::string ParaRecord::toString(Task task)
         "bench",
         "get game",
         "duplicate",
+        "server",
         "none"
     };
         

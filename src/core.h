@@ -55,6 +55,11 @@ protected:
     /// For stats
     std::chrono::steady_clock::time_point startTime;
     int64_t blockCnt, processedPgnSz, processedCnt, workingGameIdx, errCnt, succCount;
+    // Total size (bytes) of the PGN file(s) being read, if any -- set by
+    // PgnRead before its read loop (pgnread.cpp) so printStats() can turn
+    // processedPgnSz into a real percentage for -progress. Zero/unused for
+    // tasks that don't read PGN files (bench, query against a .db3, etc).
+    int64_t pgnTotalSz;
 };
 
 } // namespace ocdb

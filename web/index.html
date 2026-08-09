@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OCGDB</title>
+<meta name="description" content="OCGDB web UI -- browse an Open Chess Game Database Standard database, view games and run PQL queries.">
+<script>
+  // Apply the saved theme before first paint to avoid a light/dark flash.
+  (function () {
+    var t = localStorage.getItem('ocgdbTheme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/board.css">
+<link rel="stylesheet" href="css/views.css">
+</head>
+<body>
+
+<header class="app-header">
+  <div class="app-header-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">&#9822;</span>
+      <span class="brand-name" data-i18n="brand">OCGDB</span>
+    </div>
+    <nav class="nav-tabs" aria-label="Main">
+      <button type="button" class="nav-tab" data-view="intro" data-i18n="nav.intro">Introduction</button>
+      <button type="button" class="nav-tab" data-view="browse" data-i18n="nav.browse">Browse</button>
+      <button type="button" class="nav-tab" data-view="pql" data-i18n="nav.pql">PQL Query</button>
+      <button type="button" class="nav-tab" data-view="stats" data-i18n="nav.stats">Statistics</button>
+      <button type="button" class="nav-tab" data-view="admin" data-i18n="nav.admin">Admin</button>
+    </nav>
+    <div class="header-actions">
+      <button type="button" id="lang-toggle" class="icon-btn" data-i18n-title="nav.langToggle" title="Language">VI/EN</button>
+      <button type="button" id="theme-toggle" class="icon-btn" data-i18n-title="nav.themeToggle" title="Theme">&#9788;/&#9789;</button>
+    </div>
+  </div>
+</header>
+
+<div id="db-error-banner" class="db-error-banner" hidden></div>
+
+<main class="app-main">
+  <div class="view-panel" data-view="intro"></div>
+  <div class="view-panel" data-view="browse" hidden></div>
+  <div class="view-panel" data-view="pql" hidden></div>
+  <div class="view-panel" data-view="stats" hidden></div>
+  <div class="view-panel" data-view="admin" hidden></div>
+</main>
+
+<footer class="app-footer muted small">
+  OCGDB &mdash; Open Chess Game Database Standard &middot;
+  <a href="https://github.com/nguyenpham/ocgdb" target="_blank" rel="noopener">github.com/nguyenpham/ocgdb</a>
+</footer>
+
+<script src="js/i18n.js"></script>
+<script src="js/api.js"></script>
+<script src="js/pieces.js"></script>
+<script src="js/board.js"></script>
+<script src="js/viewer.js"></script>
+<script src="js/browse.js"></script>
+<script src="js/pql.js"></script>
+<script src="js/stats.js"></script>
+<script src="js/intro.js"></script>
+<script src="js/admin.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

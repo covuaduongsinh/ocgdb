@@ -207,6 +207,7 @@ uint64_t PGNRead::processPgnFile(const std::string& path)
         }
         
         blockCnt = processedPgnSz = 0;
+        pgnTotalSz = static_cast<int64_t>(size);
         for (size_t sz = 0, idx = 0; sz < size && gameCnt < paraRecord.gameNumberLimit; idx++) {
             auto k = std::min(blockSz, size - sz);
             if (k == 0) {
