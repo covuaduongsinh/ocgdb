@@ -1272,11 +1272,26 @@ std::string WebServer::apiQueryJson(const std::string& pql, int limit)
         paraRecord.resultNumberLimit = std::max<int64_t>(20000, static_cast<int64_t>(limit) * 50);
     }
 
-    auto queryString = std::string("SELECT * FROM Games");
+    // Metadata terms (whiteplayer/welo/date/eco/...) need White/Black/
+    // Event/Site resolved by name -- only fullGameQueryString joins for
+    // that; the plain "SELECT * FROM Games" only has the raw *ID columns.
+    auto baseQueryString = parser.metadataNeedsNames() ? DbRead::fullGameQueryString : std::string("SELECT * FROM Games");
+    auto queryString = baseQueryString;
+
+    std::vector<std::string> whereClauses;
+    auto metadataWhere = parser.getMetadataWhereSql();
+    if (!metadataWhere.empty()) whereClauses.push_back(metadataWhere);
     auto materialFilter = parser.buildMaterialPreFilterSql();
     if (!materialFilter.empty() && DbRead::hasTable(active.db, "GameMaterial")) {
-        queryString = "SELECT * FROM (" + queryString + ") WHERE ID IN "
-                      "(SELECT GameID FROM GameMaterial WHERE " + materialFilter + ")";
+        whereClauses.push_back("ID IN (SELECT GameID FROM GameMaterial WHERE " + materialFilter + ")");
+    }
+    if (!whereClauses.empty()) {
+        std::string combined;
+        for (auto&& w : whereClauses) {
+            if (!combined.empty()) combined += " AND ";
+            combined += "(" + w + ")";
+        }
+        queryString = "SELECT * FROM (" + baseQueryString + ") WHERE " + combined;
     }
 
     auto t0 = std::chrono::steady_clock::now();
