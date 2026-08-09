@@ -224,17 +224,36 @@ int ChildProcess::wait()
 #include <unistd.h>
 #include <signal.h>
 #include <climits>
+#include <cstdlib>
 #include <vector>
+
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 
 namespace ocgdb {
 
 std::string getExecutablePath()
 {
 #if defined(__APPLE__)
-    // Not wired up on macOS in this repo (no build system targets it for
-    // -server yet); left as a documented gap rather than a silent wrong
-    // answer.
-    return std::string();
+    // No /proc on macOS; _NSGetExecutablePath is the standard replacement.
+    // First call (with a null buffer) reports the required size, including
+    // the terminating NUL.
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    if (size == 0) return std::string();
+
+    std::vector<char> buf(size);
+    if (_NSGetExecutablePath(buf.data(), &size) != 0) return std::string();
+
+    // _NSGetExecutablePath may return a path containing symlinks (e.g. a
+    // Homebrew shim); resolve it the same way readlink("/proc/self/exe")
+    // already gives a fully-resolved path on Linux below.
+    char resolved[PATH_MAX];
+    if (realpath(buf.data(), resolved)) {
+        return std::string(resolved);
+    }
+    return std::string(buf.data());
 #else
     char buf[PATH_MAX];
     ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);

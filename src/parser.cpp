@@ -610,6 +610,39 @@ int Parser::evaluate(const std::vector<uint64_t>& bitboardVec) const
     return root && root->evaluate(bitboardVec);
 }
 
+std::string Parser::stripLineComments(const std::string& query)
+{
+    // Logic moved here from search.cpp's CLI query loop (see runTask()
+    // there), unchanged, so both the CLI and -server's /api/query strip
+    // "//" comments the same way instead of only the CLI doing it.
+    auto s = query;
+    while (true) {
+        auto p = s.find("//");
+        if (p == std::string::npos) {
+            break;
+        }
+
+        auto q = p + 2;
+        for (; q < s.size(); q++) {
+            auto ch = s.at(q);
+            if (ch == '\n') {
+                q++;
+                break;
+            }
+        }
+
+        auto s0 = s.substr(0, p);
+        if (q >= s.size()) {
+            s = s0;
+            break;
+        } else {
+            auto s1 = s.substr(q);
+            s = s0 + s1;
+        }
+    }
+    return s;
+}
+
 bool Parser::parse(bslib::ChessVariant _variant, const char* s)
 {
     assert(s);

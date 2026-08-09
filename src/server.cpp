@@ -1204,7 +1204,10 @@ std::string WebServer::apiQueryJson(const std::string& pql, int limit)
     Json j;
     j.objBegin();
 
-    auto q = pql;
+    // Strip "// ..." comments the same way the CLI path (Search::runTask(),
+    // search.cpp) does -- previously only the CLI stripped them, so a query
+    // with a comment that worked from the command line failed here.
+    auto q = Parser::stripLineComments(pql);
     bslib::Funcs::trim(q);
     if (q.empty()) {
         j.kv("ok", false);
@@ -1318,9 +1321,13 @@ void WebServer::processAGameWithAThread(ThreadRecord* t, const bslib::PgnRecord&
 
     t->gameCnt++;
 
-    for (int i = 1, n = t->board->getHistListSize(); i <= n; i++) {
+    // See the identical loop (and comment) in Search::runTask() (search.cpp):
+    // histList[i] is the position right after move i+1, so every position in
+    // the game is i = 0 .. n-1; the previous i = 1 .. n bound silently
+    // skipped histList[0] (the position right after White's first move).
+    for (int i = 0, n = t->board->getHistListSize(); i < n; i++) {
         std::vector<uint64_t> bitboardVec;
-        if (i < n) {
+        if (i < n - 1) {
             auto hist = t->board->_getHistPointerAt(i);
             if (!hist || hist->bitboardVec.empty()) continue;
             bitboardVec = hist->bitboardVec;

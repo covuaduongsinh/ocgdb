@@ -41,8 +41,10 @@
     <ClCompile Include="..\src\epdbuilder.cpp" />
     <ClCompile Include="..\src\exporter.cpp" />
     <ClCompile Include="..\src\extract.cpp" />
+    <ClCompile Include="..\src\indexer.cpp" />
     <ClCompile Include="..\src\jobs.cpp" />
     <ClCompile Include="..\src\main.cpp" />
+    <ClCompile Include="..\src\optimizer.cpp" />
     <ClCompile Include="..\src\parser.cpp" />
     <ClCompile Include="..\src\pgnread.cpp" />
     <ClCompile Include="..\src\process.cpp" />
@@ -81,7 +83,9 @@
     <ClInclude Include="..\src\duplicate.h" />
     <ClInclude Include="..\src\exporter.h" />
     <ClInclude Include="..\src\extract.h" />
+    <ClInclude Include="..\src\indexer.h" />
     <ClInclude Include="..\src\jobs.h" />
+    <ClInclude Include="..\src\optimizer.h" />
     <ClInclude Include="..\src\parser.h" />
     <ClInclude Include="..\src\pgnread.h" />
     <ClInclude Include="..\src\process.h" />
@@ -164,7 +168,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;_WIN32_WINNT=0x0A00;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
     </ClCompile>
     <Link>
@@ -179,7 +183,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;_WIN32_WINNT=0x0A00;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
     </ClCompile>
     <Link>

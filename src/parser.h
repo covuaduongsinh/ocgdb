@@ -131,6 +131,14 @@ public:
 
     bool parse(bslib::ChessVariant _variant, const char*);
 
+    // Strips "// ..." line comments out of a raw PQL query string before
+    // it reaches parse()/lexParse(). Shared so every caller that accepts a
+    // PQL string from outside (CLI -q, and -server's /api/query) supports
+    // the same comment syntax -- previously only the CLI path stripped
+    // comments (search.cpp), so the same query with a "//" comment parsed
+    // fine from the command line but failed from the web UI.
+    static std::string stripLineComments(const std::string& query);
+
     std::string getErrorString() const;
     void printError() const;
 

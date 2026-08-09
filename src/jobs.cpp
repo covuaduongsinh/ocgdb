@@ -53,10 +53,11 @@ bool isTruthy(const std::string& s)
 // verbatim, so it stays a strict allow-list, not a denylist.
 const std::set<std::string> kCreateOpts = {
     "moves", "moves1", "moves2", "acceptnewtags", "discardcomments",
-    "discardsites", "discardnoelo", "discardfen", "reseteco", "nobot", "bot",
+    "discardsites", "discardnoelo", "discardfen", "reseteco", "nobot", "bot", "index",
 };
 const std::set<std::string> kDupOpts = { "remove", "printall", "embededgames" };
 const std::set<std::string> kQueryOpts = { "printpgn", "printall", "printfen" };
+const std::set<std::string> kOptimizeOpts = { "vacuum", "integrity" };
 
 bool filterOpts(const std::string& csv, const std::set<std::string>& allowed, std::string& out, std::string& err)
 {
@@ -240,6 +241,47 @@ bool ocgdb::buildJobArgv(const std::string& task,
         if (remove && dbs.size() == 1) writeTargetPath = dbs.front();
         paramsText = std::string(remove ? "remove duplicates in " : "check duplicates in ") +
                      std::to_string(dbs.size()) + " database(s)";
+        return true;
+    }
+
+    if (task == "index") {
+        auto dbs = splitMulti(getP(params, "db"), '|');
+        if (dbs.empty()) { err = "at least one database is required"; return false; }
+        for (auto&& p : dbs) {
+            if (!checkPath(pathFilter, p, err)) return false;
+            if (!checkExists(p, err)) return false;
+        }
+
+        argv.push_back("-index");
+        for (auto&& p : dbs) { argv.push_back("-db"); argv.push_back(p); }
+
+        // Only close/reopen WebServer's own read connection (see
+        // onJobStart/onJobEnd, server.cpp) when there is exactly one
+        // unambiguous target, same convention as "dup" above.
+        if (dbs.size() == 1) writeTargetPath = dbs.front();
+        paramsText = "build indexes on " + std::to_string(dbs.size()) + " database(s)";
+        return true;
+    }
+
+    if (task == "optimize") {
+        auto dbs = splitMulti(getP(params, "db"), '|');
+        if (dbs.empty()) { err = "at least one database is required"; return false; }
+        for (auto&& p : dbs) {
+            if (!checkPath(pathFilter, p, err)) return false;
+            if (!checkExists(p, err)) return false;
+        }
+
+        std::string optsFiltered;
+        auto opts = getP(params, "opts");
+        if (!opts.empty() && !filterOpts(opts, kOptimizeOpts, optsFiltered, err)) return false;
+
+        argv.push_back("-optimize");
+        for (auto&& p : dbs) { argv.push_back("-db"); argv.push_back(p); }
+        if (!optsFiltered.empty()) { argv.push_back("-o"); argv.push_back(optsFiltered); }
+
+        if (dbs.size() == 1) writeTargetPath = dbs.front();
+        paramsText = "optimize " + std::to_string(dbs.size()) + " database(s)" +
+                     (optsFiltered.empty() ? std::string() : " (" + optsFiltered + ")");
         return true;
     }
 

@@ -45,6 +45,8 @@ enum class Task
     getgame,
     dup,
     server,
+    index,      // create secondary SQL indexes on Games/Comments (see indexer.h)
+    optimize,   // ANALYZE/integrity_check/VACUUM/PRAGMA optimize (see optimizer.h)
     none,
 };
 
@@ -71,6 +73,7 @@ enum {
     create_flag_discard_no_elo          = 1 << 6,
     create_flag_discard_fen             = 1 << 7,
     create_flag_reset_eco               = 1 << 8,
+    create_flag_index                   = 1 << 9,
 
     query_flag_print_all                = 1 << 10,
     query_flag_print_fen                = 1 << 11,
@@ -78,9 +81,16 @@ enum {
 
     dup_flag_remove                     = 1 << 15,
     dup_flag_embededgames               = 1 << 16,
-    
+
     lichess_flag_nobot                  = 1 << 20,
     lichess_flag_bot                    = 1 << 21,
+
+    // for -optimize: which maintenance steps to run (see optimizer.h);
+    // ANALYZE always runs, the other two are opt-in since they are heavier
+    // (VACUUM rewrites the whole file and needs free disk space roughly
+    // equal to the database size; integrity_check is a full scan)
+    optimize_flag_vacuum                = 1 << 22,
+    optimize_flag_integrity             = 1 << 23,
 
 };
 
