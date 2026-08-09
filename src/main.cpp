@@ -22,6 +22,7 @@
 #include "indexer.h"
 #include "optimizer.h"
 #include "material.h"
+#include "tree.h"
 
 #include "board/chess.h"
 
@@ -91,6 +92,11 @@ void runTask(ocgdb::ParaRecord& param)
             core = new ocgdb::MaterialBuilder;
             break;
         }
+        case ocgdb::Task::tree:
+        {
+            core = new ocgdb::OpeningTreeBuilder;
+            break;
+        }
 
         default:
             break;
@@ -139,7 +145,7 @@ int main(int argc, const char * argv[]) {
             continue;
         }
         if (str == "-create" || str == "-merge" || str == "-export" || str == "-dup" || str == "-server"
-            || str == "-index" || str == "-optimize" || str == "-material") {
+            || str == "-index" || str == "-optimize" || str == "-material" || str == "-tree") {
             if (str == "-create") {
                 paraRecord.task = ocgdb::Task::create;
             } else if (str == "-merge") {
@@ -156,6 +162,8 @@ int main(int argc, const char * argv[]) {
                 paraRecord.task = ocgdb::Task::optimize;
             } else if (str == "-material") {
                 paraRecord.task = ocgdb::Task::material;
+            } else if (str == "-tree") {
+                paraRecord.task = ocgdb::Task::tree;
             }
             if (oldTask != ocgdb::Task::none) {
                 errCnt++;
@@ -193,6 +201,10 @@ int main(int argc, const char * argv[]) {
         }
         if (str == "-plycount") {
             paraRecord.limitLen = std::atoi(argv[++i]);
+            continue;
+        }
+        if (str == "-depth") {
+            paraRecord.treeDepth = std::atoi(argv[++i]);
             continue;
         }
         if (str == "-resultcount") {
@@ -286,12 +298,14 @@ void print_usage()
     " -index                build secondary SQL indexes on Games/Comments to speed up filtering/sorting, works with -db\n" \
     " -optimize             run SQLite maintenance (ANALYZE always; VACUUM/integrity_check via -o), works with -db\n" \
     " -material             build the GameMaterial PQL pre-filter table (skips games -q can't match), works with -db\n" \
+    " -tree                 build the OpeningTree table (per-position next-move stats), works with -db, -depth\n" \
     " -pgn <file>           PGN game database file, repeat to add multi files\n" \
     " -db <file>            database file, extension should be .ocgdb.db3, repeat to add multi files\n" \
     " -r <file>             report file, works with -g, -q, -dup\n" \
     "                       use :memory: to create in-memory database\n" \
     " -elo <n>              discard games with Elo under n (for creating)\n" \
     " -plycount <n>         discard games with ply-count under n (for creating)\n" \
+    " -depth <n>            how many plies deep to index, default 20 (for -tree)\n" \
     " -resultcount <n>      stop querying if the number of results above n (for querying)\n" \
     " -cpu <n>              number of threads, should <= total physical cores, omit it for using all cores\n" \
     " -desc \"<string>\"      a description to write to the table Info when creating a new database\n" \
@@ -335,7 +349,8 @@ void print_usage()
     " ocgdb -server -db big.ocgdb.db3 -port 3456 -root D:\\chess -admintoken mysecret\n" \
     " ocgdb -index -db big.ocgdb.db3\n" \
     " ocgdb -optimize -db big.ocgdb.db3 -o vacuum,integrity\n" \
-    " ocgdb -material -db big.ocgdb.db3\n"
+    " ocgdb -material -db big.ocgdb.db3\n" \
+    " ocgdb -tree -db big.ocgdb.db3 -depth 24\n"
     "\n" \
     "Main functions/features:\n" \
     "1. create an SQLite database from multi PGN files\n" \
@@ -347,7 +362,8 @@ void print_usage()
     "7. serve a local web UI/API to browse a database, view games and run PQL queries\n" \
     "8. build secondary SQL indexes on a database to speed up filtering/sorting\n" \
     "9. run routine SQLite maintenance (ANALYZE/VACUUM/integrity_check) on a database\n" \
-    "10. build a GameMaterial pre-filter table so PQL queries can skip games that can't match\n"
+    "10. build a GameMaterial pre-filter table so PQL queries can skip games that can't match\n" \
+    "11. build an opening tree (per-position next-move stats: games, win/draw/loss, avg Elo)\n"
     ;
 
     std::cerr << str << std::endl;

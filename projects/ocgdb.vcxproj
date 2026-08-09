@@ -53,6 +53,7 @@
     <ClCompile Include="..\src\report.cpp" />
     <ClCompile Include="..\src\search.cpp" />
     <ClCompile Include="..\src\server.cpp" />
+    <ClCompile Include="..\src\tree.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\3rdparty\httplib\httplib.h" />
@@ -95,6 +96,7 @@
     <ClInclude Include="..\src\report.h" />
     <ClInclude Include="..\src\search.h" />
     <ClInclude Include="..\src\server.h" />
+    <ClInclude Include="..\src\tree.h" />
     <ClInclude Include="..\src\json.h" />
   </ItemGroup>
   <ItemGroup>

@@ -63,6 +63,11 @@ private:
     std::string apiNameLookupJson(const char* table, const std::string& q, int limit) const;
     std::string apiStatsJson(bool refresh);
     std::string apiQueryJson(const std::string& pql, int limit);
+    // GET /api/tree?fen=... -- next-move stats (games, W/D/L, avg Elo, most
+    // recent year) for the position `fen` names, from the OpeningTree table
+    // (see tree.h/.cpp for how -tree builds it). `fen` empty means the
+    // standard starting position.
+    std::string apiTreeJson(const std::string& fen) const;
 
     // Loads one game's tags + move list (SAN, UCI, per-ply FEN, comments)
     // using `board`, which the caller owns. Mirrors DbRead::queryForABoard

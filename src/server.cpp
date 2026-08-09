@@ -81,7 +81,7 @@ const char* GamesParamNames[] = {
 const char* JobParamNames[] = {
     "task", "pgn", "db", "opts", "elo", "plycount", "cpu", "desc",
     "overwrite", "dbDest", "dbSources", "pgnOut", "remove", "confirm",
-    "printall", "report", "pql", "printFormat", nullptr
+    "printall", "report", "pql", "printFormat", "depth", nullptr
 };
 
 std::string randomHexToken(size_t bytes)
@@ -510,6 +510,12 @@ void WebServer::runTask()
         res.set_content(apiQueryJson(req.get_param_value("pql"), limit), "application/json; charset=utf-8");
     });
 
+    server.Get("/api/tree", [this](const httplib::Request& req, httplib::Response& res) {
+        std::shared_lock<std::shared_mutex> lock;
+        if (!tryReadLock(lock)) { res.status = 503; res.set_content(busyJsonBody(jobManager->activeJob()), "application/json; charset=utf-8"); return; }
+        res.set_content(apiTreeJson(req.get_param_value("fen")), "application/json; charset=utf-8");
+    });
+
     // ---- admin routes: token required, never mounted at "/" ------------
 
     server.Get("/api/admin/status", [this](const httplib::Request& req, httplib::Response& res) {
@@ -736,6 +742,10 @@ std::string WebServer::apiInfoJson() const
     // wrong, just slower), so this is informational for the UI, not a
     // hard requirement anywhere.
     j.kv("hasGameMaterial", DbRead::hasTable(active.db, "GameMaterial"));
+
+    // Whether -tree has been run -- see tree.h; the UI uses this to decide
+    // whether to show opening-tree stats next to the board.
+    j.kv("hasOpeningTree", DbRead::hasTable(active.db, "OpeningTree"));
 
     j.kv("dbPath", active.path);
 
@@ -1303,6 +1313,68 @@ std::string WebServer::apiQueryJson(const std::string& pql, int limit)
             if (hasGamesColumn("Date")) j.kv("date", stmt.getColumn("Date")); else j.kvNull("date");
             j.objEnd();
         }
+    }
+    j.arrEnd();
+
+    j.objEnd();
+    return j.str();
+}
+
+////////////////////////////////////////////////////////////////////////////
+// /api/tree
+
+std::string WebServer::apiTreeJson(const std::string& fen) const
+{
+    Json j;
+    j.objBegin();
+
+    if (!active.db || !DbRead::hasTable(active.db, "OpeningTree")) {
+        j.kv("ok", false);
+        j.kv("error", "this database has no opening tree yet (run the tree task first)");
+        j.objEnd();
+        return j.str();
+    }
+
+    // fen empty -> BoardCore::newGame()'s own default is the standard
+    // starting position (every task that reads record.fenText, which is
+    // empty for the overwhelming majority of games, already relies on
+    // this exact behavior).
+    auto board = bslib::Funcs::createBoard(bslib::ChessVariant::standard);
+    board->newGame(fen);
+    // hashKey is uint64_t; OpeningTree stores it as a plain SQLite INTEGER
+    // (signed 64-bit) the same way Hist::hashKey (int64_t) does when
+    // -tree builds the table (tree.cpp) -- a bit-pattern-preserving
+    // reinterpretation, consistent both ways.
+    auto hashKey = static_cast<int64_t>(board->hashKey);
+    delete board;
+
+    j.kv("ok", true);
+    j.key("moves");
+    j.arrBegin();
+    try {
+        SQLite::Statement stmt(*active.db,
+            "SELECT San, Games, WhiteWin, Draw, BlackWin, EloSum, EloCnt, LastYear "
+            "FROM OpeningTree WHERE HashKey = ? ORDER BY Games DESC");
+        stmt.bind(1, hashKey);
+        while (stmt.executeStep()) {
+            j.objBegin();
+            j.kv("san", stmt.getColumn("San").getString());
+            j.kv("games", stmt.getColumn("Games").getInt64());
+            j.kv("whiteWin", stmt.getColumn("WhiteWin").getInt64());
+            j.kv("draw", stmt.getColumn("Draw").getInt64());
+            j.kv("blackWin", stmt.getColumn("BlackWin").getInt64());
+            auto eloCnt = stmt.getColumn("EloCnt").getInt64();
+            if (eloCnt > 0) {
+                j.kv("avgElo", stmt.getColumn("EloSum").getInt64() / eloCnt);
+            } else {
+                j.kvNull("avgElo");
+            }
+            j.kv("lastYear", stmt.getColumn("LastYear").getInt64());
+            j.objEnd();
+        }
+    } catch (std::exception& e) {
+        j.kv("ok", false);
+        j.kv("error", std::string("could not query OpeningTree: ") + e.what());
     }
     j.arrEnd();
 

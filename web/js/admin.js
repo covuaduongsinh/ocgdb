@@ -336,7 +336,7 @@
     host.innerHTML =
       '<label class="field admin-task-select">' + t().t('admin.task') +
         '<select name="task">' +
-          ['create', 'merge', 'export', 'dup', 'bench', 'query', 'index', 'optimize', 'material'].map((k) =>
+          ['create', 'merge', 'export', 'dup', 'bench', 'query', 'index', 'optimize', 'material', 'tree'].map((k) =>
             '<option value="' + k + '"' + (k === task ? ' selected' : '') + '>' + t().t('admin.task.' + k) + '</option>').join('') +
         '</select></label>' +
       '<form class="admin-task-form" data-task="' + task + '">' + taskFieldsHtml(task) + '</form>' +
@@ -443,6 +443,9 @@
       parts.push(area('db', 'dbIn', true));
     } else if (task === 'material') {
       parts.push(area('db', 'dbIn', true));
+    } else if (task === 'tree') {
+      parts.push(area('db', 'dbIn', true));
+      parts.push(num('depth', 'depth'));
     } else if (task === 'optimize') {
       parts.push(area('db', 'dbIn', true));
       parts.push(check('vacuum', 'vacuum'));
@@ -494,6 +497,9 @@
       params.db = joinLines(val('db'));
     } else if (task === 'material') {
       params.db = joinLines(val('db'));
+    } else if (task === 'tree') {
+      params.db = joinLines(val('db'));
+      if (val('depth')) params.depth = val('depth');
     } else if (task === 'optimize') {
       params.db = joinLines(val('db'));
       const opts = [];
@@ -552,6 +558,10 @@
     } else if (task === 'material') {
       parts.push('-material');
       splitLines(val('db')).forEach((p) => parts.push('-db', q(p)));
+    } else if (task === 'tree') {
+      parts.push('-tree');
+      splitLines(val('db')).forEach((p) => parts.push('-db', q(p)));
+      if (val('depth')) parts.push('-depth', val('depth'));
     } else if (task === 'optimize') {
       parts.push('-optimize');
       splitLines(val('db')).forEach((p) => parts.push('-db', q(p)));
