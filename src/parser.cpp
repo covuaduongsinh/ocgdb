@@ -14,6 +14,8 @@
 #include <sstream>
 #include <map>
 #include <set>
+#include <array>
+#include <algorithm>
 
 #include "parser.h"
 #include "board/chess.h"
@@ -608,6 +610,116 @@ void Parser::printTree(const Node* node, std::string prefix) const
 int Parser::evaluate(const std::vector<uint64_t>& bitboardVec) const
 {
     return root && root->evaluate(bitboardVec);
+}
+
+namespace {
+
+// Must stay in sync with the CREATE TABLE column list in material.cpp
+// (MaterialBuilder::openDB()).
+struct PieceCol { char letter; const char* column; };
+const PieceCol kPieceCols[12] = {
+    {'K', "MaxKw"}, {'Q', "MaxQw"}, {'R', "MaxRw"}, {'B', "MaxBw"}, {'N', "MaxNw"}, {'P', "MaxPw"},
+    {'k', "MaxKb"}, {'q', "MaxQb"}, {'r', "MaxRb"}, {'b', "MaxBb"}, {'n', "MaxNb"}, {'p', "MaxPb"},
+};
+
+// Index into kPieceCols for a bare single-letter piece node (K/Q/R/B/N/P/
+// k/q/r/b/n/p), ignoring any square mask -- a masked count is always <=
+// the unmasked total, so a bound derived from a masked comparison still
+// safely bounds the unmasked total. Returns -1 for anything else,
+// including the "white"/"black" total pseudo-pieces (no column for those).
+int pieceColIndex(const Node* node)
+{
+    if (!node || node->nodeType != NodeType::piece || node->string.size() != 1) return -1;
+    auto c = node->string[0];
+    for (int i = 0; i < 12; i++) {
+        if (kPieceCols[i].letter == c) return i;
+    }
+    return -1;
+}
+
+// Safe lower bound on a piece's count implied by "piece op constant"
+// evaluating truthy (nonzero), after normalizing so the piece is
+// conceptually on the left (flipping the operator if it was actually on
+// the right -- "3 <= Q" means the same thing as "Q >= 3"). 0 means "no
+// bound extractable", which is always a safe (if unhelpful) answer.
+int boundFromComparison(Operator op, bool pieceOnLeft, int constant)
+{
+    auto normOp = op;
+    if (!pieceOnLeft) {
+        switch (op) {
+            case Operator::op_ge: normOp = Operator::op_le; break;
+            case Operator::op_g:  normOp = Operator::op_l;  break;
+            case Operator::op_le: normOp = Operator::op_ge; break;
+            case Operator::op_l:  normOp = Operator::op_g;  break;
+            default: break; // = and <> are symmetric already
+        }
+    }
+    switch (normOp) {
+        case Operator::op_eq: return constant > 0 ? constant : 0;
+        case Operator::op_ge: return constant > 0 ? constant : 0;
+        case Operator::op_g:  return constant >= 0 ? constant + 1 : 0;
+        default: return 0; // <, <=, <> can all be satisfied by a count of 0
+    }
+}
+
+// Fills `bounds[0..11]` with a safe lower bound per piece column implied
+// by `node` evaluating truthy. See buildMaterialPreFilterSql() (parser.h)
+// for the reasoning behind and/or combination and why anything else
+// (arithmetic, piece-vs-piece, fen/pattern) is left at 0.
+void collectMaterialBounds(const Node* node, std::array<int, 12>& bounds)
+{
+    if (!node) return;
+
+    if (node->nodeType == NodeType::piece) {
+        auto idx = pieceColIndex(node);
+        if (idx >= 0) bounds[idx] = std::max(bounds[idx], 1);
+        return;
+    }
+
+    if (node->nodeType != NodeType::op) return;
+
+    if (node->op == Operator::op_and || node->op == Operator::op_or) {
+        std::array<int, 12> l{}, r{};
+        collectMaterialBounds(node->lhs, l);
+        collectMaterialBounds(node->rhs, r);
+        auto isAnd = node->op == Operator::op_and;
+        for (int i = 0; i < 12; i++) {
+            bounds[i] = std::max(bounds[i], isAnd ? std::max(l[i], r[i]) : std::min(l[i], r[i]));
+        }
+        return;
+    }
+
+    auto lIdx = pieceColIndex(node->lhs);
+    auto rIdx = pieceColIndex(node->rhs);
+    auto lNum = node->lhs && node->lhs->nodeType == NodeType::number;
+    auto rNum = node->rhs && node->rhs->nodeType == NodeType::number;
+
+    if (lIdx >= 0 && rNum) {
+        bounds[lIdx] = std::max(bounds[lIdx], boundFromComparison(node->op, true, node->rhs->number));
+    } else if (rIdx >= 0 && lNum) {
+        bounds[rIdx] = std::max(bounds[rIdx], boundFromComparison(node->op, false, node->lhs->number));
+    }
+    // Anything else (arithmetic combinations like "Q+R", comparisons
+    // between two pieces, fen/pattern clauses) yields no extra info here
+    // -- a safe no-op, not traversed any further.
+}
+
+} // namespace
+
+std::string Parser::buildMaterialPreFilterSql() const
+{
+    if (!root) return {};
+
+    std::array<int, 12> bounds{};
+    collectMaterialBounds(root, bounds);
+
+    std::string sql;
+    for (int i = 0; i < 12; i++) {
+        if (bounds[i] <= 0) continue;
+        if (!sql.empty()) sql += " AND ";
+        sql += std::string(kPieceCols[i].column) + " >= " + std::to_string(bounds[i]);
+    }
+    return sql;
 }
 
 std::string Parser::stripLineComments(const std::string& query)

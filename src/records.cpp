@@ -172,6 +172,17 @@ bool ParaRecord::isValid() const
             break;
         }
 
+        case Task::material:
+        {
+            if (dbPaths.empty()) {
+                errorString = "Must have at least a database (.db3) path. Mising or wrong parameter -db";
+                return false;
+            }
+
+            ok = true;
+            break;
+        }
+
         default:
             break;
     }
@@ -221,6 +232,7 @@ std::string ParaRecord::toString(Task task)
         "server",
         "index",
         "optimize",
+        "material",
         "none"
     };
         

@@ -94,6 +94,18 @@ SearchField DbRead::getMoveField(SQLite::Database* db, bool* hashMoves)
 
 
 
+bool DbRead::hasTable(SQLite::Database* db, const std::string& name)
+{
+    if (!db) return false;
+    try {
+        SQLite::Statement stmt(*db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?");
+        stmt.bind(1, name);
+        return stmt.executeStep();
+    } catch (std::exception&) {
+        return false;
+    }
+}
+
 void DbRead::extractHeader(SQLite::Statement& query, bslib::PgnRecord& record)
 {
     for(int i = 0, cnt = query.getColumnCount(); i < cnt; ++i) {

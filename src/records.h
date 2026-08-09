@@ -47,6 +47,7 @@ enum class Task
     server,
     index,      // create secondary SQL indexes on Games/Comments (see indexer.h)
     optimize,   // ANALYZE/integrity_check/VACUUM/PRAGMA optimize (see optimizer.h)
+    material,   // build GameMaterial PQL pre-filter table (see material.h)
     none,
 };
 

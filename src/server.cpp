@@ -731,6 +731,12 @@ std::string WebServer::apiInfoJson() const
     // warn on very large databases.
     j.kv("hasIndexes", hasIdx);
 
+    // Whether -material has been run on this database -- see material.h.
+    // PQL queries silently fall back to a full scan without it (never
+    // wrong, just slower), so this is informational for the UI, not a
+    // hard requirement anywhere.
+    j.kv("hasGameMaterial", DbRead::hasTable(active.db, "GameMaterial"));
+
     j.kv("dbPath", active.path);
 
     j.objEnd();
@@ -1256,8 +1262,15 @@ std::string WebServer::apiQueryJson(const std::string& pql, int limit)
         paraRecord.resultNumberLimit = std::max<int64_t>(20000, static_cast<int64_t>(limit) * 50);
     }
 
+    auto queryString = std::string("SELECT * FROM Games");
+    auto materialFilter = parser.buildMaterialPreFilterSql();
+    if (!materialFilter.empty() && DbRead::hasTable(active.db, "GameMaterial")) {
+        queryString = "SELECT * FROM (" + queryString + ") WHERE ID IN "
+                      "(SELECT GameID FROM GameMaterial WHERE " + materialFilter + ")";
+    }
+
     auto t0 = std::chrono::steady_clock::now();
-    readADb(active.path, "SELECT * FROM Games");
+    readADb(active.path, queryString);
     auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - t0).count();
 
