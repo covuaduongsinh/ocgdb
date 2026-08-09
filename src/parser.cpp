@@ -231,10 +231,16 @@ bool Node::isValid() const
         case NodeType::pattern:
             return !patternBitBoards.empty() && patternTolerance >= 0;
 
+        case NodeType::meta:
+            return !lhs && !rhs && metaField != MetaField::none;
+
+        case NodeType::stringlit:
+            return !lhs && !rhs;
+
         default:
             break;
     }
-    
+
     return false;
 }
 
@@ -573,6 +579,9 @@ static const std::string errorStrings[] = {
     "missing factor",
     "missing close bracket",
     "input invalid",
+    "invalid use of a metadata term (whiteplayer/blackplayer/player/event/site/welo/belo/elo/"
+    "date/year/eco/result) -- these can only be combined with \"and\" (not \"or\" or nested "
+    "inside another expression), and text fields only support \"=\"/\"<>\"",
 };
 
 std::string Parser::getErrorString(ParseError error)
@@ -609,7 +618,11 @@ void Parser::printTree(const Node* node, std::string prefix) const
 
 int Parser::evaluate(const std::vector<uint64_t>& bitboardVec) const
 {
-    return root && root->evaluate(bitboardVec);
+    // A null root means the whole query was metadata terms, fully
+    // absorbed by extractMetadata() during parse() -- every position of
+    // a game that already passed the SQL WHERE clause counts as a match
+    // (there's no position-level constraint left to check).
+    return !root || root->evaluate(bitboardVec);
 }
 
 namespace {
@@ -722,6 +735,232 @@ std::string Parser::buildMaterialPreFilterSql() const
     return sql;
 }
 
+namespace {
+
+// Standard SQL string-literal escaping (double up embedded single quotes)
+// -- the complete, sufficient defense against SQL injection for a value
+// embedded as a quoted literal; no other character needs special handling
+// in a SQLite string literal.
+std::string sqlQuoteString(const std::string& s)
+{
+    std::string out = "'";
+    for (char c : s) {
+        if (c == '\'') out += '\'';
+        out += c;
+    }
+    out += "'";
+    return out;
+}
+
+// PQL wildcard syntax ("*"/"?", familiar from shell globs and how
+// /api/players etc. already document prefix search) -> SQL LIKE syntax
+// ("%"/"_"). Any literal %, _, or \ the user actually typed is escaped
+// with a backslash so it can't be mistaken for a wildcard; paired with
+// "ESCAPE '\'" at every call site that uses this.
+std::string globToLikePattern(const std::string& s)
+{
+    std::string out;
+    for (char c : s) {
+        if (c == '*') out += '%';
+        else if (c == '?') out += '_';
+        else if (c == '%' || c == '_' || c == '\\') { out += '\\'; out += c; }
+        else out += c;
+    }
+    return out;
+}
+
+bool metaFieldNeedsNames(MetaField f)
+{
+    return f == MetaField::whitePlayer || f == MetaField::blackPlayer || f == MetaField::player;
+}
+
+// Text fields go through LIKE/NOT LIKE with glob-wildcard translation
+// (see globToLikePattern) and only support "="/"<>" -- comparisons like
+// "<" on a player name don't have a sound meaning, so they're rejected at
+// the call site rather than silently doing a lexicographic string compare
+// nobody asked for. Numeric fields (welo/belo/elo/year) support all six
+// operators directly.
+bool metaFieldIsText(MetaField f)
+{
+    switch (f) {
+        case MetaField::whitePlayer: case MetaField::blackPlayer: case MetaField::player:
+        case MetaField::event: case MetaField::site:
+        case MetaField::date: case MetaField::eco: case MetaField::result:
+            return true;
+        default:
+            return false;
+    }
+}
+
+const char* opToSql(Operator op)
+{
+    switch (op) {
+        case Operator::op_eq: return "=";
+        case Operator::op_l:  return "<";
+        case Operator::op_le: return "<=";
+        case Operator::op_g:  return ">";
+        case Operator::op_ge: return ">=";
+        case Operator::op_ne: return "<>";
+        default: return nullptr;
+    }
+}
+
+// Builds the SQL fragment for one "metaField op constant" comparison
+// (constant already normalized to the metadata side via `pieceOnLeft`,
+// same trick as boundFromComparison() above). Returns empty (and sets
+// *ok = false) for anything not soundly expressible: an operator with no
+// meaning for the field's type, or (defensively) an unrecognized field.
+std::string metaComparisonSql(MetaField field, Operator op, bool metaOnLeft,
+                               int numConstant, const std::string& strConstant, bool isNum, bool& ok)
+{
+    // Normalize so the field is conceptually on the left, same as
+    // boundFromComparison() -- "2700 <= welo" means the same as
+    // "welo >= 2700".
+    auto normOp = op;
+    if (!metaOnLeft) {
+        switch (op) {
+            case Operator::op_ge: normOp = Operator::op_le; break;
+            case Operator::op_g:  normOp = Operator::op_l;  break;
+            case Operator::op_le: normOp = Operator::op_ge; break;
+            case Operator::op_l:  normOp = Operator::op_g;  break;
+            default: break; // = and <> are symmetric already
+        }
+    }
+
+    if (metaFieldIsText(field)) {
+        if (!isNum && (normOp == Operator::op_eq || normOp == Operator::op_ne)) {
+            auto likeOp = normOp == Operator::op_eq ? "LIKE" : "NOT LIKE";
+            auto pattern = sqlQuoteString(globToLikePattern(strConstant)) + " ESCAPE '\\'";
+            switch (field) {
+                case MetaField::whitePlayer: return "White " + std::string(likeOp) + " " + pattern;
+                case MetaField::blackPlayer: return "Black " + std::string(likeOp) + " " + pattern;
+                case MetaField::player:
+                    return "(White " + std::string(likeOp) + " " + pattern + " OR Black " + std::string(likeOp) + " " + pattern + ")";
+                case MetaField::event: return "Event " + std::string(likeOp) + " " + pattern;
+                case MetaField::site:  return "Site "  + std::string(likeOp) + " " + pattern;
+                case MetaField::eco:   return "ECO "   + std::string(likeOp) + " " + pattern;
+                case MetaField::result: return "Result " + std::string(likeOp) + " " + pattern;
+                case MetaField::date:  return "Date "  + std::string(likeOp) + " " + pattern;
+                default: break;
+            }
+        }
+        ok = false;
+        return {};
+    }
+
+    // Numeric field: welo/belo/elo/year.
+    auto sqlOp = opToSql(normOp);
+    if (!sqlOp || isNum == false) {
+        ok = false;
+        return {};
+    }
+    auto n = std::to_string(numConstant);
+    switch (field) {
+        case MetaField::welo: return "WhiteElo " + std::string(sqlOp) + " " + n;
+        case MetaField::belo: return "BlackElo " + std::string(sqlOp) + " " + n;
+        case MetaField::elo:  return "(WhiteElo " + std::string(sqlOp) + " " + n + " OR BlackElo " + std::string(sqlOp) + " " + n + ")";
+        case MetaField::year: return "CAST(SUBSTR(Date,1,4) AS INTEGER) " + std::string(sqlOp) + " " + n;
+        default: break;
+    }
+    ok = false;
+    return {};
+}
+
+// Final safety net after extractMetadata() runs: that function only ever
+// *descends* into "and" chains (deliberately -- see its own comment), so
+// a metadata term sitting anywhere else in the tree (inside "or", as an
+// arithmetic operand, anywhere extractMetadata() didn't specifically
+// recurse into) is left completely untouched rather than examined at
+// all. Node::evaluate() has no per-game data to give such a node -- it
+// would silently fall through to evaluate()'s NodeType default case and
+// return 0, quietly turning e.g. "Q=3 or welo>=2700" into just "Q=3".
+// This scans the *entire* final tree regardless of extractMetadata()'s
+// own recursion shape, so parse() can refuse the query outright instead.
+bool containsMetaNode(const Node* node)
+{
+    if (!node) return false;
+    if (node->nodeType == NodeType::meta) return true;
+    return containsMetaNode(node->lhs) || containsMetaNode(node->rhs);
+}
+
+} // namespace
+
+Node* Parser::extractMetadata(Node* node, bool& ok)
+{
+    if (!node || !ok) return node;
+
+    if (node->nodeType == NodeType::meta) {
+        // A bare metadata field with no comparison (e.g. just "welo" on
+        // its own) never reaches here -- Node::isValid() (see above)
+        // already rejects it before extraction runs, same as a bare
+        // number would be meaningless standing alone.
+        ok = false;
+        return node;
+    }
+
+    if (node->nodeType == NodeType::op && node->op == Operator::op_and) {
+        node->lhs = extractMetadata(node->lhs, ok);
+        node->rhs = extractMetadata(node->rhs, ok);
+        if (!ok) return node;
+
+        if (!node->lhs && !node->rhs) { delete node; return nullptr; }
+        if (!node->lhs) { auto r = node->rhs; node->rhs = nullptr; delete node; return r; }
+        if (!node->rhs) { auto l = node->lhs; node->lhs = nullptr; delete node; return l; }
+        return node;
+    }
+
+    if (node->nodeType == NodeType::op) {
+        auto lIsMeta = node->lhs && node->lhs->nodeType == NodeType::meta;
+        auto rIsMeta = node->rhs && node->rhs->nodeType == NodeType::meta;
+
+        if (lIsMeta || rIsMeta) {
+            // A metadata comparison anywhere except directly under a
+            // chain of "and"s -- inside "or", or as an operand of
+            // arithmetic -- can't be pulled out without changing what
+            // the query means (see getMetadataWhereSql() in parser.h).
+            // Reject outright rather than silently doing something
+            // unsound; NOT extracting it and leaving it for
+            // Node::evaluate() would be equally wrong, since evaluate()
+            // has no per-game metadata to look at.
+            if (node->op != Operator::op_eq && node->op != Operator::op_ne &&
+                node->op != Operator::op_l && node->op != Operator::op_le &&
+                node->op != Operator::op_g && node->op != Operator::op_ge) {
+                ok = false;
+                return node;
+            }
+
+            auto metaNode = lIsMeta ? node->lhs : node->rhs;
+            auto otherNode = lIsMeta ? node->rhs : node->lhs;
+
+            bool isNum = otherNode && otherNode->nodeType == NodeType::number;
+            bool isStr = otherNode && otherNode->nodeType == NodeType::stringlit;
+            if (!isNum && !isStr) {
+                ok = false;
+                return node;
+            }
+
+            auto sql = metaComparisonSql(metaNode->metaField, node->op, lIsMeta,
+                                          isNum ? otherNode->number : 0,
+                                          isStr ? otherNode->string : std::string(),
+                                          isNum, ok);
+            if (!ok) return node;
+
+            if (!metadataWhereSql.empty()) metadataWhereSql += " AND ";
+            metadataWhereSql += sql;
+            if (metaFieldNeedsNames(metaNode->metaField)) metadataNeedsNames_ = true;
+
+            deleteTree(node);
+            return nullptr;
+        }
+    }
+
+    // Anything else (a position-only comparison, "or", arithmetic,
+    // fen/pattern) is left exactly as-is; extractMetadata() only ever
+    // descends into "and" chains, by design (see the op_and branch
+    // above) -- it does not recurse into node->lhs/node->rhs here.
+    return node;
+}
+
 std::string Parser::stripLineComments(const std::string& query)
 {
     // Logic moved here from search.cpp's CLI query loop (see runTask()
@@ -761,6 +1000,8 @@ bool Parser::parse(bslib::ChessVariant _variant, const char* s)
     deleteTree();
     error = ParseError::none;
     variant = _variant;
+    metadataWhereSql.clear();
+    metadataNeedsNames_ = false;
 
     if (board) delete board;
     if (board2) delete board2;
@@ -841,7 +1082,39 @@ bool Parser::parse(bslib::ChessVariant _variant, const char* s)
             error = ParseError::invalid;
         }
     }
-    
+
+    if (error == ParseError::none) {
+        auto metaOk = true;
+        root = extractMetadata(root, metaOk);
+        // Belt-and-suspenders: extractMetadata() only descends into "and"
+        // chains, so confirm nothing metadata-shaped survived anywhere
+        // else in the residual tree before trusting it to evaluate() --
+        // see containsMetaNode()'s comment in the anonymous namespace
+        // above for exactly what this catches (metadata inside "or", in
+        // particular).
+        if (metaOk && containsMetaNode(root)) {
+            metaOk = false;
+        }
+        if (!metaOk) {
+            error = ParseError::metadata_not_extractable;
+        }
+        // root may now be nullptr -- a query that was entirely metadata
+        // terms (e.g. just "welo >= 2700"). evaluate() treats that as
+        // "every position of a game that passed the SQL filter matches".
+    }
+
+    if (error != ParseError::none) {
+        // Defensive: a rejected query (e.g. metadata term found inside an
+        // "or", caught above after already having extracted an unrelated
+        // sibling "and" clause) must not leave a partial WHERE fragment
+        // sitting in metadataWhereSql for a caller to read -- every real
+        // caller already checks parse()'s return value first and never
+        // would, but getMetadataWhereSql()/metadataNeedsNames() shouldn't
+        // depend on that discipline to be safe.
+        metadataWhereSql.clear();
+        metadataNeedsNames_ = false;
+    }
+
     return error == ParseError::none;
 }
 
@@ -1156,6 +1429,14 @@ Node* Parser::parse_factor(size_t& from)
         return new Node(word);
     }
 
+    if (word.lex == Lex::stringlit) {
+        ++from;
+        auto node = new Node;
+        node->nodeType = NodeType::stringlit;
+        node->string = word.string;
+        return node;
+    }
+
     if (word.string == "(") {
         assert(word.lex == Lex::bracket);
         ++from;
@@ -1173,6 +1454,11 @@ Node* Parser::parse_factor(size_t& from)
     }
     else
     if (word.lex == Lex::string) {
+        // Metadata field names (welo, date, eco, ...) are a fixed,
+        // disjoint keyword set from piece letters/"white"/"black" --
+        // try them first, fall back to a piece/square token otherwise.
+        auto metaNode = parse_metaname(from);
+        if (metaNode) return metaNode;
         return parse_piece(from);
     }
 
@@ -1180,6 +1466,34 @@ Node* Parser::parse_factor(size_t& from)
     return nullptr;
 }
 
+namespace {
+const std::unordered_map<std::string, MetaField> kMetaNameMap = {
+    {"whiteplayer", MetaField::whitePlayer}, {"blackplayer", MetaField::blackPlayer},
+    {"player", MetaField::player}, // either side
+    {"event", MetaField::event}, {"site", MetaField::site},
+    {"welo", MetaField::welo}, {"belo", MetaField::belo}, {"elo", MetaField::elo}, // elo: either side
+    {"date", MetaField::date}, {"year", MetaField::year},
+    {"eco", MetaField::eco}, {"result", MetaField::result},
+};
+} // namespace
+
+Node* Parser::parse_metaname(size_t& from)
+{
+    assert(from <= lexVec.size());
+
+    auto word = lexVec.at(from);
+    if (word.lex != Lex::string) return nullptr;
+
+    auto it = kMetaNameMap.find(word.string);
+    if (it == kMetaNameMap.end()) return nullptr;
+
+    auto node = new Node;
+    node->nodeType = NodeType::meta;
+    node->metaField = it->second;
+    node->string = word.string;
+    ++from;
+    return node;
+}
 
 Node* Parser::parse_piece(size_t& from)
 {
@@ -1278,7 +1592,7 @@ std::vector<LexWord> Parser::lexParse(const char* s)
     assert(s && error == ParseError::none);
 
     enum class State {
-        none, text, number, comparison, fen
+        none, text, number, comparison, fen, stringlit
     };
 
     std::vector<LexWord> words;
@@ -1286,6 +1600,7 @@ std::vector<LexWord> Parser::lexParse(const char* s)
     std::string text;
     auto state = State::none;
     auto ok = true;
+    char quoteChar = 0; // which of "/' opened the current stringlit
 
     static const char* comparisonChars = "=<>!";
     for(auto p = s; ok && error == ParseError::none; ++p) {
@@ -1305,6 +1620,17 @@ std::vector<LexWord> Parser::lexParse(const char* s)
                 if (isdigit(*p)) {
                     state = State::number;
                     text = *p;
+                    break;
+                }
+
+                if (*p == '"' || *p == '\'') {
+                    // Metadata term values (player/event/site/eco/result
+                    // names, see MetaField) -- quoted so they can contain
+                    // spaces and the "*"/"?" glob wildcards without
+                    // colliding with PQL's own operator characters.
+                    state = State::stringlit;
+                    quoteChar = *p;
+                    text.clear();
                     break;
                 }
 
@@ -1443,6 +1769,24 @@ std::vector<LexWord> Parser::lexParse(const char* s)
                     word.lex = Lex::number;
                     word.string = text;
                     words.push_back(word);
+                    break;
+                }
+                text += *p;
+                break;
+
+            case State::stringlit:
+                if (*p == quoteChar) {
+                    state = State::none;
+
+                    LexWord word;
+                    word.lex = Lex::stringlit;
+                    word.string = text;
+                    words.push_back(word);
+                    break;
+                }
+                if (!*p) {
+                    // unterminated string literal
+                    error = ParseError::wrong_lexical;
                     break;
                 }
                 text += *p;

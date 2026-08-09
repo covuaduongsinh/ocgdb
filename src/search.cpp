@@ -133,11 +133,17 @@ void Search::runTask()
 
         // Query databases
         if (!paraRecord.dbPaths.empty()) {
-            auto baseQueryString = (paraRecord.optionFlag & query_flag_print_pgn) ? DbRead::fullGameQueryString : "SELECT * FROM Games";
-            // A safe, conservative pre-filter (see buildMaterialPreFilterSql())
-            // -- empty when nothing useful could be derived from this query,
-            // in which case every database is scanned in full exactly as
-            // before this existed.
+            // Metadata terms (whiteplayer/welo/date/eco/...) reference
+            // White/Black/Event/Site by name, and Result/WhiteElo/
+            // BlackElo/Date/ECO -- all only resolved through the joined
+            // fullGameQueryString, never the bare "SELECT * FROM Games".
+            auto baseQueryString = (paraRecord.optionFlag & query_flag_print_pgn) || parser.metadataNeedsNames()
+                                    ? DbRead::fullGameQueryString : "SELECT * FROM Games";
+            // Exact (metadata) and safe-conservative (material, see
+            // buildMaterialPreFilterSql()) pre-filters -- both empty when
+            // nothing applies, in which case every database is scanned in
+            // full exactly as before either existed.
+            auto metadataWhere = parser.getMetadataWhereSql();
             auto materialFilter = parser.buildMaterialPreFilterSql();
             for(auto && dbPath : paraRecord.dbPaths) {
                 gameCnt = commentCnt = 0;
@@ -145,17 +151,27 @@ void Search::runTask()
                 errCnt = 0;
                 succCount = 0;
 
-                auto queryString = baseQueryString;
+                std::vector<std::string> whereClauses;
+                if (!metadataWhere.empty()) whereClauses.push_back(metadataWhere);
                 if (!materialFilter.empty()) {
                     try {
                         SQLite::Database probe(dbPath, SQLite::OPEN_READONLY);
                         if (DbRead::hasTable(&probe, "GameMaterial")) {
-                            queryString = "SELECT * FROM (" + baseQueryString + ") WHERE ID IN "
-                                          "(SELECT GameID FROM GameMaterial WHERE " + materialFilter + ")";
+                            whereClauses.push_back("ID IN (SELECT GameID FROM GameMaterial WHERE " + materialFilter + ")");
                         }
                     } catch (std::exception&) {
-                        // fall back to the unfiltered scan
+                        // fall back to unfiltered for this specific clause
                     }
+                }
+
+                auto queryString = baseQueryString;
+                if (!whereClauses.empty()) {
+                    std::string combined;
+                    for (auto&& w : whereClauses) {
+                        if (!combined.empty()) combined += " AND ";
+                        combined += "(" + w + ")";
+                    }
+                    queryString = "SELECT * FROM (" + baseQueryString + ") WHERE " + combined;
                 }
                 readADb(dbPath, queryString);
             }

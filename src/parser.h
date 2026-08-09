@@ -31,12 +31,25 @@ enum class ParseError
     missing_factor,
     missing_close,
     invalid,
+    // A metadata term (whiteplayer/blackplayer/player/event/site/welo/
+    // belo/elo/date/year/eco/result) appeared somewhere it can't be
+    // soundly pulled out into a SQL WHERE clause -- see
+    // Parser::extractMetadata() (parser.cpp) for exactly what's allowed
+    // (a plain "and" chain from the root) and why anything else (inside
+    // "or", negated, mixed into arithmetic) is rejected outright rather
+    // than silently mishandled.
+    metadata_not_extractable,
     max
 };
 
 enum class Lex
 {
     none, string, number, fen,
+    // A quoted string literal, e.g. "Carlsen*" -- distinct from `string`
+    // (bare identifiers: piece letters, "and"/"or", metadata field names)
+    // so the grammar can tell "player name value" apart from "the
+    // whiteplayer identifier itself" at the token level.
+    stringlit,
 
     operator_begin,
     operator_and = operator_begin, operator_or,
@@ -48,6 +61,21 @@ enum class Lex
     no_node,
     comma = no_node,
     bracket,
+};
+
+// Game-level (not position-level) fields a PQL query can filter on. See
+// Parser::extractMetadata() (parser.cpp): these never reach
+// Node::evaluate(bitboardVec) -- they're translated straight to a SQL
+// WHERE clause instead, since they don't depend on which ply is being
+// looked at.
+enum class MetaField
+{
+    none,
+    whitePlayer, blackPlayer, player, // player: either side
+    event, site,
+    welo, belo, elo,                  // elo: either side
+    date, year,
+    eco, result,
 };
 
 class LexWord
@@ -67,7 +95,9 @@ enum class Operator
 
 enum class NodeType
 {
-    none, piece, number, op, fen, pattern
+    none, piece, number, op, fen, pattern,
+    meta,       // a MetaField leaf, e.g. the "welo" in "welo >= 2700"
+    stringlit,  // a quoted string literal, e.g. the "Carlsen*" above
 };
 
 enum class PatternOperand
@@ -104,6 +134,7 @@ private:
 
 public:
     NodeType nodeType = NodeType::none;
+    MetaField metaField = MetaField::none; // valid when nodeType == meta
     std::string string;
     int number;
     Operator op = Operator::none;
@@ -171,11 +202,41 @@ public:
     // pieces it involves, never a wrong one.
     std::string buildMaterialPreFilterSql() const;
 
+    // Game-level metadata terms (whiteplayer/blackplayer/player/event/
+    // site/welo/belo/elo/date/year/eco/result) are extracted out of the
+    // parsed tree during parse() itself -- they don't depend on which ply
+    // is being evaluated, so Node::evaluate(bitboardVec) never sees them;
+    // only a metadata-free residual tree is left behind (or, if the whole
+    // query was metadata, an always-true tree). Only sound to do when
+    // every metadata term is reachable from the root through "and" alone
+    // (see extractMetadata() in parser.cpp for the reasoning) -- anything
+    // else (metadata inside "or", negated, mixed into arithmetic) makes
+    // parse() fail with ParseError::metadata_not_extractable rather than
+    // silently doing something unsound.
+    //
+    // Empty string: this query has no metadata terms (the common case);
+    // callers keep using "SELECT * FROM Games" and skip this entirely.
+    std::string getMetadataWhereSql() const { return metadataWhereSql; }
+
+    // True if getMetadataWhereSql() references White/Black/Event/Site --
+    // i.e. the caller must query DbRead::fullGameQueryString (which joins
+    // Players/Events/Sites to resolve names), not "SELECT * FROM Games"
+    // (which only has the raw *ID foreign keys), for those column names
+    // to resolve.
+    bool metadataNeedsNames() const { return metadataNeedsNames_; }
+
 
 
 private:
     void deleteTree();
     void deleteTree(Node* node) const;
+
+    // Walks `node`, appending SQL for every metadata leaf reachable
+    // through "and" to metadataWhereSql, and returns the metadata-free
+    // residual (nullptr if the whole subtree was consumed). Sets `ok` to
+    // false (once, the first time) if a metadata term is found somewhere
+    // it can't be soundly extracted -- see the definition in parser.cpp.
+    Node* extractMetadata(Node* node, bool& ok);
 
     std::vector<LexWord> lexParse(const char*);
 
@@ -186,6 +247,7 @@ private:
     Node* parse_factor(size_t&);
     Node* parse_piece(size_t&);
     Node* parse_piecename(size_t&);
+    Node* parse_metaname(size_t&);
     Node* parse_square(size_t&);
     Node* parse_fenstring(size_t&);
     Node* parse_pattern(size_t&);
@@ -204,8 +266,11 @@ private:
 
     std::vector<LexWord> lexVec;
     Node* root = nullptr;
-    
+
     ParseError error = ParseError::none;
+
+    std::string metadataWhereSql;
+    bool metadataNeedsNames_ = false;
 };
 
 } // namespace ocdb
