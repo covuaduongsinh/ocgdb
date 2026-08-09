@@ -21,6 +21,7 @@
 #include "server.h"
 #include "indexer.h"
 #include "optimizer.h"
+#include "material.h"
 
 #include "board/chess.h"
 
@@ -85,6 +86,11 @@ void runTask(ocgdb::ParaRecord& param)
             core = new ocgdb::Optimizer;
             break;
         }
+        case ocgdb::Task::material:
+        {
+            core = new ocgdb::MaterialBuilder;
+            break;
+        }
 
         default:
             break;
@@ -133,7 +139,7 @@ int main(int argc, const char * argv[]) {
             continue;
         }
         if (str == "-create" || str == "-merge" || str == "-export" || str == "-dup" || str == "-server"
-            || str == "-index" || str == "-optimize") {
+            || str == "-index" || str == "-optimize" || str == "-material") {
             if (str == "-create") {
                 paraRecord.task = ocgdb::Task::create;
             } else if (str == "-merge") {
@@ -148,6 +154,8 @@ int main(int argc, const char * argv[]) {
                 paraRecord.task = ocgdb::Task::index;
             } else if (str == "-optimize") {
                 paraRecord.task = ocgdb::Task::optimize;
+            } else if (str == "-material") {
+                paraRecord.task = ocgdb::Task::material;
             }
             if (oldTask != ocgdb::Task::none) {
                 errCnt++;
@@ -277,6 +285,7 @@ void print_usage()
     " -server               start a local web UI/API server for browsing a database, works with -db\n" \
     " -index                build secondary SQL indexes on Games/Comments to speed up filtering/sorting, works with -db\n" \
     " -optimize             run SQLite maintenance (ANALYZE always; VACUUM/integrity_check via -o), works with -db\n" \
+    " -material             build the GameMaterial PQL pre-filter table (skips games -q can't match), works with -db\n" \
     " -pgn <file>           PGN game database file, repeat to add multi files\n" \
     " -db <file>            database file, extension should be .ocgdb.db3, repeat to add multi files\n" \
     " -r <file>             report file, works with -g, -q, -dup\n" \
@@ -325,7 +334,8 @@ void print_usage()
     " ocgdb -server -db big.ocgdb.db3 -port 3456\n" \
     " ocgdb -server -db big.ocgdb.db3 -port 3456 -root D:\\chess -admintoken mysecret\n" \
     " ocgdb -index -db big.ocgdb.db3\n" \
-    " ocgdb -optimize -db big.ocgdb.db3 -o vacuum,integrity\n"
+    " ocgdb -optimize -db big.ocgdb.db3 -o vacuum,integrity\n" \
+    " ocgdb -material -db big.ocgdb.db3\n"
     "\n" \
     "Main functions/features:\n" \
     "1. create an SQLite database from multi PGN files\n" \
@@ -336,7 +346,8 @@ void print_usage()
     "6. query games from multi SQLite databases or PGN files, using PQL (Position Query Language)\n" \
     "7. serve a local web UI/API to browse a database, view games and run PQL queries\n" \
     "8. build secondary SQL indexes on a database to speed up filtering/sorting\n" \
-    "9. run routine SQLite maintenance (ANALYZE/VACUUM/integrity_check) on a database\n"
+    "9. run routine SQLite maintenance (ANALYZE/VACUUM/integrity_check) on a database\n" \
+    "10. build a GameMaterial pre-filter table so PQL queries can skip games that can't match\n"
     ;
 
     std::cerr << str << std::endl;

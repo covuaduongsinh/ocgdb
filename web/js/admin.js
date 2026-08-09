@@ -336,7 +336,7 @@
     host.innerHTML =
       '<label class="field admin-task-select">' + t().t('admin.task') +
         '<select name="task">' +
-          ['create', 'merge', 'export', 'dup', 'bench', 'query', 'index', 'optimize'].map((k) =>
+          ['create', 'merge', 'export', 'dup', 'bench', 'query', 'index', 'optimize', 'material'].map((k) =>
             '<option value="' + k + '"' + (k === task ? ' selected' : '') + '>' + t().t('admin.task.' + k) + '</option>').join('') +
         '</select></label>' +
       '<form class="admin-task-form" data-task="' + task + '">' + taskFieldsHtml(task) + '</form>' +
@@ -441,6 +441,8 @@
       parts.push(text('report', 'report', false));
     } else if (task === 'index') {
       parts.push(area('db', 'dbIn', true));
+    } else if (task === 'material') {
+      parts.push(area('db', 'dbIn', true));
     } else if (task === 'optimize') {
       parts.push(area('db', 'dbIn', true));
       parts.push(check('vacuum', 'vacuum'));
@@ -489,6 +491,8 @@
       if (val('printFormat')) params.printFormat = val('printFormat');
       if (val('report')) params.report = val('report');
     } else if (task === 'index') {
+      params.db = joinLines(val('db'));
+    } else if (task === 'material') {
       params.db = joinLines(val('db'));
     } else if (task === 'optimize') {
       params.db = joinLines(val('db'));
@@ -544,6 +548,9 @@
       if (val('report')) parts.push('-r', q(val('report')));
     } else if (task === 'index') {
       parts.push('-index');
+      splitLines(val('db')).forEach((p) => parts.push('-db', q(p)));
+    } else if (task === 'material') {
+      parts.push('-material');
       splitLines(val('db')).forEach((p) => parts.push('-db', q(p)));
     } else if (task === 'optimize') {
       parts.push('-optimize');

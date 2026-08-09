@@ -44,6 +44,7 @@
     <ClCompile Include="..\src\indexer.cpp" />
     <ClCompile Include="..\src\jobs.cpp" />
     <ClCompile Include="..\src\main.cpp" />
+    <ClCompile Include="..\src\material.cpp" />
     <ClCompile Include="..\src\optimizer.cpp" />
     <ClCompile Include="..\src\parser.cpp" />
     <ClCompile Include="..\src\pgnread.cpp" />
@@ -85,6 +86,7 @@
     <ClInclude Include="..\src\extract.h" />
     <ClInclude Include="..\src\indexer.h" />
     <ClInclude Include="..\src\jobs.h" />
+    <ClInclude Include="..\src\material.h" />
     <ClInclude Include="..\src\optimizer.h" />
     <ClInclude Include="..\src\parser.h" />
     <ClInclude Include="..\src\pgnread.h" />

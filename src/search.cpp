@@ -133,12 +133,30 @@ void Search::runTask()
 
         // Query databases
         if (!paraRecord.dbPaths.empty()) {
-            auto queryString = (paraRecord.optionFlag & query_flag_print_pgn) ? DbRead::fullGameQueryString : "SELECT * FROM Games";
+            auto baseQueryString = (paraRecord.optionFlag & query_flag_print_pgn) ? DbRead::fullGameQueryString : "SELECT * FROM Games";
+            // A safe, conservative pre-filter (see buildMaterialPreFilterSql())
+            // -- empty when nothing useful could be derived from this query,
+            // in which case every database is scanned in full exactly as
+            // before this existed.
+            auto materialFilter = parser.buildMaterialPreFilterSql();
             for(auto && dbPath : paraRecord.dbPaths) {
                 gameCnt = commentCnt = 0;
                 eventCnt = playerCnt = siteCnt = 1;
                 errCnt = 0;
                 succCount = 0;
+
+                auto queryString = baseQueryString;
+                if (!materialFilter.empty()) {
+                    try {
+                        SQLite::Database probe(dbPath, SQLite::OPEN_READONLY);
+                        if (DbRead::hasTable(&probe, "GameMaterial")) {
+                            queryString = "SELECT * FROM (" + baseQueryString + ") WHERE ID IN "
+                                          "(SELECT GameID FROM GameMaterial WHERE " + materialFilter + ")";
+                        }
+                    } catch (std::exception&) {
+                        // fall back to the unfiltered scan
+                    }
+                }
                 readADb(dbPath, queryString);
             }
         }

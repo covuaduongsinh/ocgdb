@@ -145,6 +145,34 @@ public:
     int evaluate(const std::vector<uint64_t>& bitboardVec) const;
     void printTree() const;
 
+    // Derives a WHERE-clause fragment over the GameMaterial table (see
+    // material.h/.cpp) expressing a SAFE, CONSERVATIVE lower bound on how
+    // many of each piece type/color this query's parsed tree could
+    // possibly require -- e.g. "Q = 3" implies a game must have reached at
+    // least 3 white queens at *some* ply to have any chance of matching.
+    // Used to pre-filter a full-database scan via GameMaterial (built by
+    // -material) before replaying a single move.
+    //
+    // Returns an empty string when nothing useful can be derived -- always
+    // a safe answer (the caller then falls back to scanning every game,
+    // exactly like before this existed). Must call parse() successfully
+    // first; returns empty if there is no parsed tree.
+    //
+    // The extraction is deliberately restricted to what can be proven safe
+    // without full interval arithmetic: bare "piece cmp constant"
+    // comparisons (optionally square-masked, e.g. "P[d4]>=1" -- the mask
+    // only makes the true count *smaller*, so the bound from the masked
+    // count still safely lower-bounds the unmasked total), combined
+    // through "and" (bounds combine via max -- both sides' constraints
+    // must hold at once) and "or" (bounds combine via min -- only one side
+    // is guaranteed, so only what both sides agree on survives). Anything
+    // else -- arithmetic combinations like "Q+R", piece-vs-piece
+    // comparisons, fen/pattern clauses -- contributes no bound for the
+    // pieces it involves, never a wrong one.
+    std::string buildMaterialPreFilterSql() const;
+
+
+
 private:
     void deleteTree();
     void deleteTree(Node* node) const;

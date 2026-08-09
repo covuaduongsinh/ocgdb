@@ -30,6 +30,11 @@ protected:
 public:
     static SearchField getMoveField(SQLite::Database* db, bool* hashMoves = nullptr);
 
+    // True if `db` has a table named `name` -- used to probe for optional
+    // derived tables (GameMaterial, OpeningTree, ...) before relying on
+    // them, since older/unprocessed databases won't have them yet.
+    static bool hasTable(SQLite::Database* db, const std::string& name);
+
     static void extractHeader(SQLite::Statement& query, bslib::PgnRecord& record);
     static void queryForABoard( bslib::PgnRecord& record,
                                 SearchField searchField,
