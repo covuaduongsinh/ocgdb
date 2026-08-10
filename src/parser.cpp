@@ -1196,6 +1196,29 @@ Node* Parser::parse_fenstring(size_t& from)
     return nullptr;
 }
 
+namespace {
+// K/Q/R/B/N/P (white) and k/q/r/b/n/p (black) -> (PieceTypeStd, Side),
+// same mapping Node::evaluate()'s NodeType::piece case uses for the
+// bitboard side/type lookup, needed here to actually place a piece on
+// `board` for a {...} pattern clause instead of just counting it.
+bool pieceLetterToTypeAndSide(char c, int& type, bslib::Side& side)
+{
+    bslib::PieceTypeStd t;
+    switch (tolower(static_cast<unsigned char>(c))) {
+        case 'k': t = bslib::PieceTypeStd::king;   break;
+        case 'q': t = bslib::PieceTypeStd::queen;  break;
+        case 'r': t = bslib::PieceTypeStd::rook;   break;
+        case 'b': t = bslib::PieceTypeStd::bishop; break;
+        case 'n': t = bslib::PieceTypeStd::knight; break;
+        case 'p': t = bslib::PieceTypeStd::pawn;   break;
+        default: return false;
+    }
+    type = static_cast<int>(t);
+    side = isupper(static_cast<unsigned char>(c)) ? bslib::Side::white : bslib::Side::black;
+    return true;
+}
+} // namespace
+
 const std::map<std::string, ocgdb::PatternOperand> patternOperandMap {
     {"=", PatternOperand::equal},
     { "==", PatternOperand::equal},
@@ -1214,6 +1237,36 @@ Node* Parser::parse_pattern(size_t& from)
     auto patternOperand = PatternOperand::equal;
     auto patternOperandDelta = 0;
     board->_clear();
+    // _clear() (BoardCore::_clear(), base.cpp) only empties the piece
+    // array -- it doesn't touch enpassant/castleRights, which otherwise
+    // stay at whatever this reused board last had (or, fresh off
+    // construction, ChessBoard's own enpassant=0 default, which is NOT
+    // the "no en passant" sentinel -- see newGame(), which explicitly
+    // sets -1 for that). posToBitboards() packs both into BBIdx::prop,
+    // which evaluate_pattern() (below) compares alongside every other
+    // piece-type bitboard, so an unset/inherited value here would make
+    // the pattern spuriously differ from (or, worse, non-deterministically
+    // match) real positions regardless of which pieces were actually
+    // placed. Zero (not -1) is the right "don't care" value specifically
+    // for evaluate_pattern()'s "lessthan"/"greaterthan" comparison, which
+    // computes "bits set on the pattern side but not the real position"
+    // (sb & ~(sb & sp)) per BBIdx slot -- 0 on the pattern side always
+    // contributes nothing to that difference, regardless of what the real
+    // position's prop value is, exactly like an unset piece-type bitboard
+    // already does for queens/rooks/etc. -1 (0xff after the low-byte
+    // mask) would instead make *every* real position missing that exact
+    // en passant square count as a difference, which is the opposite of
+    // "don't care".
+    // enpassant/castleRights are ChessBoard-specific (chess.h), not on
+    // the BoardCore base Parser's `board` member is typed as; this cast
+    // is safe because Parser::parse() only ever constructs `board` via
+    // Funcs::createBoard(bslib::ChessVariant::standard) (the only variant
+    // this codebase's PQL supports -- funcs.cpp returns nullptr, caught
+    // long before this point, for anything else).
+    auto chessBoard = static_cast<bslib::ChessBoard*>(board);
+    chessBoard->setEnpassant(0);
+    chessBoard->setCastleRights(0, 0);
+    chessBoard->setCastleRights(1, 0);
 
     auto cnt = 0;
     for(++from; from < lexVec.size(); ++from) {
@@ -1246,14 +1299,42 @@ Node* Parser::parse_pattern(size_t& from)
 
         auto node = parse_piece(from);
         if (node) {
-            if (!node->locSet.empty() && node->pieceSide != bslib::Side::none) {
-                bslib::Piece piece(node->pieceType, node->pieceSide);
-                for(auto && sq : node->locSet) {
-                    board->_setPiece(sq, piece);
+            // e.g. "Ke1" or "P[d4,e5]" inside {...} -- place that piece
+            // on every square its (optional) square-set names. A bare
+            // piece letter with no square ("K" alone) has no well-defined
+            // placement for a fixed-position pattern and is silently
+            // skipped, same as before this fix.
+            int pieceType = -1;
+            bslib::Side pieceSide = bslib::Side::none;
+            if (node->hassquareset && node->string.size() == 1 &&
+                pieceLetterToTypeAndSide(node->string.at(0), pieceType, pieceSide)) {
+                bslib::Piece piece(pieceType, pieceSide);
+                for (int sq = 0; sq < 64; ++sq) {
+                    if (node->squareset & bslib::ChessBoard::_posToBitboard[sq]) {
+                        board->_setPiece(sq, piece);
+                    }
                 }
             }
-
             delete node;
+
+            // parse_piece() (via parse_piecename()) already advances
+            // `from` past the token it consumed -- this loop's own
+            // "++from" in the for-header (which still fires on
+            // `continue`) would advance it a SECOND time, silently
+            // skipping whatever token comes right after every piece
+            // (the "," before the next piece, or the operand/tolerance
+            // that follows the last one, e.g. "<" in "{Ke1 < 0}"). Every
+            // other branch in this loop reads the current token in place
+            // without calling a sub-parser that moves `from` itself, so
+            // this compensating "--from" is needed only here. Pre-existing
+            // bug (this branch called parse_piece() with the exact same
+            // shape before the piece-placement fix above), not introduced
+            // by that fix -- but it made this fix unobservable: without
+            // it, the operand/tolerance token after a piece was always
+            // silently dropped, leaving every {...} pattern with at least
+            // one piece stuck on the default "=" (exact whole-board
+            // match) operand no matter what was actually written.
+            --from;
             continue;
         }
 

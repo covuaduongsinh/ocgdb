@@ -152,9 +152,6 @@ public:
     bool hassquareset = false, negative = false;
     int64_t squareset = 0;
 
-    int pieceType = -1;
-    bslib::Side pieceSide = bslib::Side::none;
-    std::set<int> locSet;
     std::vector<std::vector<uint64_t>> patternBitBoards;
 
     PatternOperand patternOperand;
