@@ -85,6 +85,16 @@ enum {
     // "score/depth time nodes" and quietly no-ops otherwise -- see
     // EngineScore::empty(), chesstypes.cpp).
     create_flag_parse_eval               = 1 << 13,
+    // Capture RAV variation text (raw, verbatim PGN inside "(...)") and
+    // NAG/!?-symbols into the GameTree/Comments.Nag side tables (see
+    // Builder::createDb(), builder.cpp) instead of discarding them --
+    // see BoardCore::fromMoveList()'s State::variant handling, base.cpp,
+    // for what's discarded without this. Off by default for the same
+    // reason as create_flag_parse_eval: extra work most PGNs don't need
+    // (few have any variations at all), and it's schema-additive (a
+    // database built without it opens and behaves identically to one
+    // without this feature at all).
+    create_flag_keep_variations          = 1 << 14,
 
     query_flag_print_all                = 1 << 10,
     query_flag_print_fen                = 1 << 11,
@@ -171,10 +181,23 @@ public:
     // preparing this unconditionally would throw against databases that
     // don't have it.
     SQLite::Statement *insertEvalStatement = nullptr;
+    // Lazily created the same way, gated on create_flag_keep_variations /
+    // the GameTree table's existence (see Builder::processPGNGameWithAThread(),
+    // builder.cpp, and AddGame::addAGame(), addgame.cpp).
+    SQLite::Statement *insertVariationStatement = nullptr;
+    // A 4-column (GameID, Ply, Comment, Nag) sibling of
+    // insertCommentStatement, used instead of it (never both) when
+    // create_flag_keep_variations is set -- Comments.Nag only exists on a
+    // database created with that option (see Builder::createDb()).
+    SQLite::Statement *insertCommentNagStatement = nullptr;
     SQLite::Statement *removeGameStatement = nullptr;
     SQLite::Statement *getGameStatement = nullptr;
     SQLite::Statement *queryComments = nullptr;
-    
+    // Read-side counterpart of queryComments for GameTree, used by
+    // Exporter (see Exporter::openDB()/processAGame(), exporter.cpp) --
+    // only created when the database actually has a GameTree table.
+    SQLite::Statement *queryVariations = nullptr;
+
     QueryGameRecord* qgr = nullptr;
 };
 
@@ -204,14 +227,20 @@ public:
     ~QueryGameRecord() {
         if (queryGameByID) delete queryGameByID;
         if (queryComments) delete queryComments;
+        if (queryVariations) delete queryVariations;
         if (board) delete board;
     }
-    
+
     std::string queryAndCreatePGNByGameID(bslib::PgnRecord& record);
-    
+
 public:
 
     SQLite::Statement* queryGameByID = nullptr, *queryComments = nullptr;
+    // Only prepared when the database has a GameTree table (see
+    // DbRead::hasTable(), dbread.h) -- older/non-keepvariations databases
+    // don't, and preparing a SELECT against a table that doesn't exist
+    // throws at prepare time, not lazily on first use.
+    SQLite::Statement* queryVariations = nullptr;
     bslib::BoardCore* board = nullptr;
     SearchField searchField;
     

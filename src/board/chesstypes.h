@@ -296,6 +296,17 @@ public:
     std::string comment, fenString; // moveString,
     std::vector<uint64_t> bitboardVec;
 
+    // Phase 3.1 (-o keepvariations): raw PGN text of any RAV variation(s)
+    // attached right after this move (parens' contents only, "(...)" is
+    // added back on export -- see toMoveListString(), base.cpp), and the
+    // PGN Numeric Annotation Glyph for "!"/"?"/"!!"/"??"/"!?"/"?!" (0 = none;
+    // see nagSymbolToCode()/nagCodeToSymbol(), base.cpp). Deliberately raw
+    // text, not a parsed move tree: this codebase has no per-branch board
+    // simulation, and round-tripping the exact original PGN text back out
+    // on export doesn't need one -- see GameTree (builder.cpp) for why.
+    std::string variationText;
+    int nag = 0;
+
     std::vector<EngineScore> esVec;
 
     void set(const MoveFull& _move) {

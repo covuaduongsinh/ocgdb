@@ -702,6 +702,33 @@ void BoardCore::_parseComment_standard(const std::string& comment, Hist& hist)
 }
 
 
+// Standard PGN Numeric Annotation Glyphs for the "!"/"?" family (the only
+// ones this parser's State::evalsym recognizes -- see fromMoveList()
+// below). Codes match the PGN spec's Appendix (E.4/E.5); 0 means "no NAG".
+static int nagSymbolToCode(const std::string& sym)
+{
+    if (sym == "!") return 1;
+    if (sym == "?") return 2;
+    if (sym == "!!") return 3;
+    if (sym == "??") return 4;
+    if (sym == "!?") return 5;
+    if (sym == "?!") return 6;
+    return 0;
+}
+
+static std::string nagCodeToSymbol(int code)
+{
+    switch (code) {
+        case 1: return "!";
+        case 2: return "?";
+        case 3: return "!!";
+        case 4: return "??";
+        case 5: return "!?";
+        case 6: return "?!";
+        default: return "";
+    }
+}
+
 bool BoardCore::fromMoveList(const PgnRecord* record,
                              Notation notation,
                              int flag,
@@ -715,10 +742,17 @@ bool BoardCore::fromMoveList(const PgnRecord* record,
     };
     
     auto st = State::none;
-        
+
     std::vector<std::string> moveStringVec;
     std::map<size_t, std::string> commentMap;
     std::map<size_t, std::string> eSymMap;
+    // Raw text of each top-level "(...)" RAV variation (parens' contents
+    // only), keyed the same way as commentMap/eSymMap; a multimap since a
+    // position can carry more than one alternative line ("1. e4 (1. d4)
+    // (1. c4) e5"). Only populated when ParseMoveListFlag_keepVariations
+    // is set -- see State::variant below.
+    std::multimap<size_t, std::string> variationMap;
+    size_t variantStart = 0;
 
     std::string moveString, comment, esym;
 
@@ -750,6 +784,7 @@ bool BoardCore::fromMoveList(const PgnRecord* record,
                 } else if (ch == '(') {
                     st = State::variant;
                     level++;
+                    variantStart = i + 1; // right after this '('
                 } else if (isdigit(ch)) {
                     st = State::counter;
                 }
@@ -827,6 +862,15 @@ bool BoardCore::fromMoveList(const PgnRecord* record,
                 if (ch == ')') {
                     level--;
                     if (level == 0) {
+                        if (flag & ParseMoveListFlag_keepVariations) {
+                            // Nested "(...)" inside this range are kept
+                            // verbatim as part of this variation's raw
+                            // text -- no separate capture needed for them,
+                            // since re-emitting this string on export
+                            // (toMoveListString(), below) reproduces them
+                            // exactly as originally written.
+                            variationMap.emplace(moveStringVec.size(), std::string(p + variantStart, i - variantStart));
+                        }
                         st = State::none;
                     }
                 }
@@ -926,7 +970,24 @@ bool BoardCore::fromMoveList(const PgnRecord* record,
             histList.back().comment = tmphist.comment;
             histList.back().esVec = tmphist.esVec;
         }
-        
+
+        if (flag & ParseMoveListFlag_keepVariations) {
+            auto eIt = eSymMap.find(i + 1);
+            if (eIt != eSymMap.end()) {
+                histList.back().nag = nagSymbolToCode(eIt->second);
+            }
+
+            auto range = variationMap.equal_range(i + 1);
+            if (range.first != range.second) {
+                std::string joined;
+                for (auto vIt = range.first; vIt != range.second; ++vIt) {
+                    if (!joined.empty()) joined += " ";
+                    joined += "(" + vIt->second + ")";
+                }
+                histList.back().variationText = joined;
+            }
+        }
+
         if (flag & ParseMoveListFlag_create_fen) {
             histList.back().fenString = fenString;
         }
@@ -1110,7 +1171,16 @@ std::string BoardCore::toMoveListString(const std::vector<Hist>& histList, Chess
                 }
                 break;
         }
-        
+
+        // NAG / !?-symbol (standard PGN placement: immediately after the
+        // move token, before any comment) -- round-trips what -o
+        // keepvariations captured on import (see fromMoveList(),
+        // eSymMap/nagSymbolToCode, above) back into export text.
+        if (hist.nag != 0) {
+            auto sym = nagCodeToSymbol(hist.nag);
+            if (!sym.empty()) stringStream << sym;
+        }
+
         // Comment
         auto haveComment = false;
         if (computerInfoType != CommentComputerInfoType::none) {
@@ -1123,15 +1193,22 @@ std::string BoardCore::toMoveListString(const std::vector<Hist>& histList, Chess
 
         if (!hist.comment.empty() && moveCounter) {
             stringStream << (haveComment ? "; " : " {");
-            
+
             haveComment = true;
             stringStream << hist.comment ;
         }
-        
+
         if (haveComment) {
             stringStream << "} ";
         }
-        
+
+        // RAV variation(s), already fully formed as "(...) (...)" text
+        // (see fromMoveList()'s variationMap consumption, above) -- emit
+        // verbatim right after the move/comment it was attached to.
+        if (!hist.variationText.empty()) {
+            stringStream << " " << hist.variationText;
+        }
+
         c++;
         if (itemPerLine > 0 && c >= itemPerLine) {
             c = 0;

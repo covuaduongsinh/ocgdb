@@ -402,7 +402,15 @@ namespace bslib {
             ParseMoveListFlag_create_bitboard   = 1 << 3,
             ParseMoveListFlag_discardComment    = 1 << 4,
             ParseMoveListFlag_parseComment      = 1 << 5,
-            
+            // Capture RAV variation text (raw) and NAG/!?-symbols into
+            // Hist::variationText/nag as each move is parsed (see
+            // fromMoveList()'s State::variant/evalsym handling, base.cpp)
+            // instead of discarding them. Only meaningful for the
+            // raw-PGN-text overload of fromMoveList() -- variations/NAGs
+            // aren't part of the compact Moves/Moves1/Moves2 binary
+            // encoding at all, so the blob-decode overload never sets it.
+            ParseMoveListFlag_keepVariations    = 1 << 7,
+
             ParseMoveListFlag_move_size_1_byte  = 1 << 6, // for the 2nd function one only
         };
         

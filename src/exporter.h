@@ -28,6 +28,10 @@ private:
     
 private:
     int flag;
+    // Checked once in openDB(), read (not re-queried) by every
+    // processAGame() call -- see there for why queryComments/
+    // queryVariations themselves can't be set up in openDB() at all.
+    bool hasGameTreeTable = false;
     mutable std::mutex pgnOfsMutex;
     std::ofstream pgnOfs;
 };

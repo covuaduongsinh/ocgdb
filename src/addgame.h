@@ -63,6 +63,9 @@ private:
     // is no schema-migration path here to add a missing table mid-merge.
     // Checked once, lazily, the first time it matters.
     bool evalsTableChecked = false, evalsTableExists = false;
+    // Same lazy-check pattern for GameTree/Comments.Nag (-o
+    // keepvariations, Phase 3.1) -- see addAGame(), addgame.cpp.
+    bool variationsTableChecked = false, gameTreeExists = false, commentsNagExists = false;
 
 private:
     AddGameDbRead dbRead;
