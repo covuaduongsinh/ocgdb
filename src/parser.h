@@ -248,6 +248,7 @@ private:
     Node* parse_piece(size_t&);
     Node* parse_piecename(size_t&);
     Node* parse_metaname(size_t&);
+    Node* parse_specialname(size_t&);
     Node* parse_square(size_t&);
     Node* parse_fenstring(size_t&);
     Node* parse_pattern(size_t&);
