@@ -69,6 +69,13 @@ AdminStore::AdminStore(const std::string& dbPath)
             " GameID INTEGER,"
             " PRIMARY KEY(JobID, GameID)) WITHOUT ROWID");
 
+        execSql(
+            "CREATE TABLE IF NOT EXISTS Engines ("
+            " ID INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " Name TEXT,"
+            " Path TEXT,"
+            " Options TEXT)");
+
     } catch (SQLite::Exception& e) {
         std::cerr << "Error: AdminStore could not open/init '" << dbPath << "': " << e.what() << std::endl;
         delete db;
@@ -469,6 +476,79 @@ int64_t AdminStore::countQueryResults(int jobId) const
         std::cerr << "Error: AdminStore::countQueryResults: " << e.what() << std::endl;
     }
     return 0;
+}
+
+int AdminStore::addEngine(const std::string& name, const std::string& path, const std::string& options)
+{
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (!db) return -1;
+    try {
+        SQLite::Statement stmt(*db, "INSERT INTO Engines (Name, Path, Options) VALUES (?, ?, ?)");
+        stmt.bind(1, name);
+        stmt.bind(2, path);
+        stmt.bind(3, options);
+        stmt.exec();
+        return static_cast<int>(db->getLastInsertRowid());
+    } catch (SQLite::Exception& e) {
+        std::cerr << "Error: AdminStore::addEngine: " << e.what() << std::endl;
+        return -1;
+    }
+}
+
+bool AdminStore::removeEngine(int id)
+{
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (!db) return false;
+    try {
+        SQLite::Statement stmt(*db, "DELETE FROM Engines WHERE ID = ?");
+        stmt.bind(1, id);
+        stmt.exec();
+        return db->execAndGet("SELECT changes()").getInt() > 0;
+    } catch (SQLite::Exception& e) {
+        std::cerr << "Error: AdminStore::removeEngine: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+std::vector<EngineEntry> AdminStore::listEngines() const
+{
+    std::lock_guard<std::mutex> lk(mutex_);
+    std::vector<EngineEntry> out;
+    if (!db) return out;
+    try {
+        SQLite::Statement q(*db, "SELECT ID, Name, Path, Options FROM Engines ORDER BY ID");
+        while (q.executeStep()) {
+            EngineEntry e;
+            e.id = q.getColumn(0).getInt();
+            e.name = q.getColumn(1).getString();
+            e.path = q.getColumn(2).getString();
+            e.options = q.getColumn(3).getString();
+            out.push_back(e);
+        }
+    } catch (SQLite::Exception& e) {
+        std::cerr << "Error: AdminStore::listEngines: " << e.what() << std::endl;
+    }
+    return out;
+}
+
+bool AdminStore::getEngine(int id, EngineEntry& out) const
+{
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (!db) return false;
+    try {
+        SQLite::Statement q(*db, "SELECT ID, Name, Path, Options FROM Engines WHERE ID = ?");
+        q.bind(1, id);
+        if (q.executeStep()) {
+            out.id = q.getColumn(0).getInt();
+            out.name = q.getColumn(1).getString();
+            out.path = q.getColumn(2).getString();
+            out.options = q.getColumn(3).getString();
+            return true;
+        }
+    } catch (SQLite::Exception& e) {
+        std::cerr << "Error: AdminStore::getEngine: " << e.what() << std::endl;
+    }
+    return false;
 }
 
 // --------------------------------------------------------------- Job log

@@ -200,6 +200,68 @@
       })();
       return { stop: () => controller.abort() };
     },
+
+    adminEngines() { return adminFetch('GET', '/api/admin/engines'); },
+    adminAddEngine(name, path, options) { return adminFetch('POST', '/api/admin/engines/add', { name, path, options }); },
+    adminRemoveEngine(id) { return adminFetch('POST', '/api/admin/engines/remove', { id }); },
+
+    // Streams POST /api/analyse the same way adminJobStream() streams the
+    // job log/status endpoint -- NDJSON chunks over fetch() +
+    // ReadableStream (not EventSource, same reasoning: it can't set
+    // X-OCGDB-Token). One line per engine "info" update, then a final
+    // {"type":"bestmove",...} line before the connection closes on its
+    // own (the server ends the stream once the engine's search
+    // finishes -- there's no separate "done" signal to look for here the
+    // way adminJobStream's status events have "final").
+    adminAnalyse(engineId, fen, opts, onEvent) {
+      const controller = new AbortController();
+      (async () => {
+        const usp = new URLSearchParams();
+        usp.set('engineId', engineId);
+        usp.set('fen', fen || '');
+        if (opts && opts.depth) usp.set('depth', opts.depth);
+        if (opts && opts.movetimeMs) usp.set('movetimeMs', opts.movetimeMs);
+        if (opts && opts.multipv) usp.set('multipv', opts.multipv);
+
+        let res;
+        try {
+          res = await fetch('/api/analyse', {
+            method: 'POST',
+            headers: { 'X-OCGDB-Token': getAdminToken(), 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: usp.toString(),
+            signal: controller.signal,
+          });
+        } catch (e) {
+          return;
+        }
+        if (res.status === 401) document.dispatchEvent(new CustomEvent('ocgdb:admin-unauthorized'));
+        if (!res.ok || !res.body) {
+          let body = null;
+          try { body = await res.json(); } catch (e) { /* ignore */ }
+          onEvent({ type: 'error', error: (body && body.error) || ('HTTP ' + res.status) });
+          return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            let nl;
+            while ((nl = buf.indexOf('\n')) >= 0) {
+              const line = buf.slice(0, nl);
+              buf = buf.slice(nl + 1);
+              if (!line) continue;
+              try { onEvent(JSON.parse(line)); } catch (e) { /* skip a malformed line */ }
+            }
+          }
+        } catch (e) { /* aborted mid-read, or connection dropped */ }
+      })();
+      return { stop: () => controller.abort() };
+    },
   };
 
   window.OcgdbApi = API;

@@ -13,6 +13,9 @@
       this.cur = 0; // ply pointer: 0..moves.length
       this.flipped = false;
       this._onKeydown = this._onKeydown.bind(this);
+      this.engines = [];
+      this.analysisStream = null; // { stop() } from adminAnalyse(), while a search is running
+      this.analysisEngineId = null;
     }
 
     async load(gameId) {
@@ -34,6 +37,7 @@
 
     unmount() {
       document.removeEventListener('keydown', this._onKeydown);
+      this._stopAnalysis();
       this.root.innerHTML = '';
     }
 
@@ -96,6 +100,13 @@
             '</div>' +
             '<div class="viewer-side-col">' +
               '<div class="viewer-moves"></div>' +
+              (window.OcgdbApi.hasAdminToken() ?
+                '<details class="viewer-analysis-wrap">' +
+                  '<summary>' + t().t('viewer.analysis') + '</summary>' +
+                  '<div class="viewer-analysis" data-role="analysis">' +
+                    '<div class="panel-loading">' + t().t('common.loading') + '</div>' +
+                  '</div>' +
+                '</details>' : '') +
               '<details class="viewer-pgn-wrap">' +
                 '<summary>' + t().t('viewer.pgn') + '</summary>' +
                 '<pre class="viewer-pgn"></pre>' +
@@ -119,6 +130,8 @@
       this.root.querySelectorAll('[data-act]').forEach((btn) => {
         btn.addEventListener('click', () => this._onAction(btn.dataset.act));
       });
+
+      if (window.OcgdbApi.hasAdminToken()) this._initAnalysisPanel();
 
       this._update();
     }
@@ -191,6 +204,79 @@
         commentEl.textContent = comment;
         commentEl.style.display = comment ? '' : 'none';
       }
+
+      // A running analysis session tracks the board: every navigation
+      // re-issues it against the new position (Phase 5.2's "attach to the
+      // board in the game viewer" -- the engine always analyses whatever
+      // position is currently on screen, like Lichess's analysis board).
+      if (this.analysisEngineId != null) this._startAnalysis(this.analysisEngineId);
+    }
+
+    // ------------------------------------------------------------ analysis
+
+    async _initAnalysisPanel() {
+      const panel = this.root.querySelector('[data-role="analysis"]');
+      if (!panel) return;
+      try {
+        const data = await window.OcgdbApi.adminEngines();
+        this.engines = data.engines || [];
+      } catch (e) {
+        panel.innerHTML = '<div class="panel-error">' + esc(e.message) + '</div>';
+        return;
+      }
+      if (!this.engines.length) {
+        panel.innerHTML = '<div class="panel-empty">' + t().t('viewer.noEngines') + '</div>';
+        return;
+      }
+      panel.innerHTML =
+        '<div class="viewer-analysis-controls">' +
+          '<select data-role="engine-select">' +
+            this.engines.map((e) => '<option value="' + e.id + '">' + esc(e.name) + '</option>').join('') +
+          '</select>' +
+          '<button type="button" class="btn btn-small" data-role="analysis-toggle">' + t().t('viewer.analyseStart') + '</button>' +
+        '</div>' +
+        '<div class="viewer-analysis-output muted" data-role="analysis-output"></div>';
+
+      panel.querySelector('[data-role="analysis-toggle"]').addEventListener('click', () => {
+        if (this.analysisEngineId != null) {
+          this._stopAnalysis();
+        } else {
+          const engineId = Number(panel.querySelector('[data-role="engine-select"]').value);
+          this._startAnalysis(engineId);
+        }
+      });
+    }
+
+    _startAnalysis(engineId) {
+      this._stopAnalysis(); // supersede any in-flight search for the previous position
+      this.analysisEngineId = engineId;
+
+      const toggleBtn = this.root.querySelector('[data-role="analysis-toggle"]');
+      if (toggleBtn) toggleBtn.textContent = t().t('viewer.analyseStop');
+      const outEl = this.root.querySelector('[data-role="analysis-output"]');
+      if (outEl) outEl.textContent = t().t('viewer.analysing');
+
+      const fen = this._fenAtPly(this.cur);
+      this.analysisStream = window.OcgdbApi.adminAnalyse(engineId, fen, { depth: 20 }, (evt) => {
+        if (!outEl || this.analysisEngineId !== engineId) return; // stale response from a superseded search
+        if (evt.type === 'error') {
+          outEl.textContent = evt.error;
+        } else if (evt.type === 'info') {
+          const score = evt.mate != null
+            ? t().t('viewer.mateIn', { n: Math.abs(evt.mate) })
+            : (evt.scoreCp >= 0 ? '+' : '') + (evt.scoreCp / 100).toFixed(2);
+          outEl.textContent = t().t('viewer.depth') + ' ' + evt.depth + ': ' + score + '  ' + (evt.pv || '');
+        } else if (evt.type === 'bestmove') {
+          outEl.textContent += '  (' + t().t('viewer.bestMove') + ': ' + evt.move + ')';
+        }
+      });
+    }
+
+    _stopAnalysis() {
+      if (this.analysisStream) { this.analysisStream.stop(); this.analysisStream = null; }
+      this.analysisEngineId = null;
+      const toggleBtn = this.root.querySelector('[data-role="analysis-toggle"]');
+      if (toggleBtn) toggleBtn.textContent = t().t('viewer.analyseStart');
     }
   }
 

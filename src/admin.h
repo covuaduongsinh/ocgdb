@@ -60,6 +60,13 @@ struct JobLogLine {
     std::string line;
 };
 
+struct EngineEntry {
+    int id = -1;
+    std::string name;
+    std::string path;    // absolute path to the UCI engine executable; must have passed pathAllowed() (server.cpp) when registered
+    std::string options; // free-form, e.g. "Hash=256;Threads=4" -- interpretation is up to the caller, this store just persists it
+};
+
 class AdminStore
 {
 public:
@@ -100,6 +107,17 @@ public:
     // ---- Job log ---------------------------------------------------
     void appendLog(int jobId, const std::string& line);
     std::vector<JobLogLine> getLog(int jobId, int64_t fromSeq) const;
+
+    // ---- Engines (Phase 5.1) -----------------------------------------
+    // Registering an engine here is registering an executable this
+    // server will later run with no sandboxing (EngineProcess, engine.h)
+    // -- callers MUST run the path through pathAllowed() (server.cpp)
+    // before calling addEngine(). See engine.h's file comment for the
+    // full threat-model note.
+    int addEngine(const std::string& name, const std::string& path, const std::string& options);
+    bool removeEngine(int id);
+    std::vector<EngineEntry> listEngines() const;
+    bool getEngine(int id, EngineEntry& out) const;
 
     // ---- Query job results (Phase 2.5) ------------------------------
     // Structured GameID matches for a "query" task job, parsed by

@@ -98,6 +98,7 @@ ChildProcess::~ChildProcess()
 void ChildProcess::closeHandles()
 {
     if (hReadPipe) { CloseHandle((HANDLE)hReadPipe); hReadPipe = nullptr; }
+    if (hWritePipe) { CloseHandle((HANDLE)hWritePipe); hWritePipe = nullptr; }
     if (hThread) { CloseHandle((HANDLE)hThread); hThread = nullptr; }
     if (hProcess) { CloseHandle((HANDLE)hProcess); hProcess = nullptr; }
 }
@@ -107,6 +108,7 @@ bool ChildProcess::start(const std::string& exePath, const std::vector<std::stri
     errorString.clear();
 
     HANDLE readPipe = nullptr, writePipe = nullptr;
+    HANDLE stdinReadPipe = nullptr, stdinWritePipe = nullptr;
     SECURITY_ATTRIBUTES sa{};
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
@@ -119,12 +121,22 @@ bool ChildProcess::start(const std::string& exePath, const std::vector<std::stri
     // The parent's read end must NOT be inherited by the child.
     SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
 
+    if (!CreatePipe(&stdinReadPipe, &stdinWritePipe, &sa, 0)) {
+        errorString = "CreatePipe (stdin) failed";
+        CloseHandle(readPipe);
+        CloseHandle(writePipe);
+        return false;
+    }
+    // Same rule, mirrored: the parent's write end (the one it keeps and
+    // writes to) must NOT be inherited; the child's read end must be.
+    SetHandleInformation(stdinWritePipe, HANDLE_FLAG_INHERIT, 0);
+
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     si.dwFlags |= STARTF_USESTDHANDLES;
     si.hStdOutput = writePipe;
     si.hStdError = writePipe;
-    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdInput = stdinReadPipe;
 
     PROCESS_INFORMATION pi{};
 
@@ -146,10 +158,12 @@ bool ChildProcess::start(const std::string& exePath, const std::vector<std::stri
         &si, &pi);
 
     CloseHandle(writePipe);
+    CloseHandle(stdinReadPipe);
 
     if (!ok) {
         errorString = "CreateProcessW failed, error " + std::to_string(GetLastError());
         CloseHandle(readPipe);
+        CloseHandle(stdinWritePipe);
         return false;
     }
 
@@ -157,10 +171,25 @@ bool ChildProcess::start(const std::string& exePath, const std::vector<std::stri
     hProcess = pi.hProcess;
     hThread = nullptr;
     hReadPipe = readPipe;
+    hWritePipe = stdinWritePipe;
     running = true;
     terminated = false;
     exitCode = -1;
     return true;
+}
+
+bool ChildProcess::writeLine(const std::string& line)
+{
+    if (!hWritePipe) return false;
+    auto data = line + "\n";
+    DWORD written = 0;
+    BOOL ok = WriteFile((HANDLE)hWritePipe, data.data(), (DWORD)data.size(), &written, nullptr);
+    return ok && written == data.size();
+}
+
+void ChildProcess::closeStdin()
+{
+    if (hWritePipe) { CloseHandle((HANDLE)hWritePipe); hWritePipe = nullptr; }
 }
 
 bool ChildProcess::readLine(std::string& line)
@@ -271,6 +300,7 @@ ChildProcess::~ChildProcess()
 void ChildProcess::closeHandles()
 {
     if (readFd >= 0) { close(readFd); readFd = -1; }
+    if (writeFd >= 0) { close(writeFd); writeFd = -1; }
 }
 
 bool ChildProcess::start(const std::string& exePath, const std::vector<std::string>& args)
@@ -280,6 +310,14 @@ bool ChildProcess::start(const std::string& exePath, const std::vector<std::stri
     int fds[2];
     if (pipe(fds) != 0) {
         errorString = "pipe() failed";
+        return false;
+    }
+
+    int inFds[2];
+    if (pipe(inFds) != 0) {
+        errorString = "pipe() (stdin) failed";
+        close(fds[0]);
+        close(fds[1]);
         return false;
     }
 
@@ -293,27 +331,48 @@ bool ChildProcess::start(const std::string& exePath, const std::vector<std::stri
         errorString = "fork() failed";
         close(fds[0]);
         close(fds[1]);
+        close(inFds[0]);
+        close(inFds[1]);
         return false;
     }
 
     if (child == 0) {
-        // Child: merge stdout+stderr into the write end, close the read end.
+        // Child: merge stdout+stderr into the write end, close the read end;
+        // read stdin from the parent's write end via inFds[0].
         dup2(fds[1], STDOUT_FILENO);
         dup2(fds[1], STDERR_FILENO);
+        dup2(inFds[0], STDIN_FILENO);
         close(fds[0]);
         close(fds[1]);
+        close(inFds[0]);
+        close(inFds[1]);
         execv(exePath.c_str(), argv.data());
         _exit(127); // execv only returns on failure
     }
 
     // Parent
     close(fds[1]);
+    close(inFds[0]);
     readFd = fds[0];
+    writeFd = inFds[1];
     pid = child;
     running = true;
     terminated = false;
     exitCode = -1;
     return true;
+}
+
+bool ChildProcess::writeLine(const std::string& line)
+{
+    if (writeFd < 0) return false;
+    auto data = line + "\n";
+    ssize_t n = write(writeFd, data.data(), data.size());
+    return n == (ssize_t)data.size();
+}
+
+void ChildProcess::closeStdin()
+{
+    if (writeFd >= 0) { close(writeFd); writeFd = -1; }
 }
 
 bool ChildProcess::readLine(std::string& line)
