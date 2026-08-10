@@ -292,7 +292,21 @@ int Node::evaluate(const std::vector<uint64_t>& bitboardVec) const
             
         case NodeType::piece:
             assert(!lhs && !rhs);
-            
+
+            if (string == "wcastle" || string == "bcastle" || string == "ep") {
+                // prop packs: (enpassant & 0xff) | rights[black] << 8 | rights[white] << 10
+                // -- see ChessBoard::posToBitboards(), chess.cpp. enpassant
+                // is stored as -1 ("none"), which the "& 0xff" mask turns
+                // into 0xff; a real square is always 0-63.
+                auto prop = bitboardVec[static_cast<int>(bslib::BBIdx::prop)];
+                if (string == "ep") {
+                    return (prop & 0xff) != 0xff ? 1 : 0;
+                }
+                auto blackRights = (prop >> 8) & 0x3;
+                auto whiteRights = (prop >> 10) & 0x3;
+                return static_cast<int>(string == "wcastle" ? whiteRights : blackRights);
+            }
+
             int64_t bb;
             switch (string.at(0)) {
                 case 'w':
@@ -1495,11 +1509,37 @@ Node* Parser::parse_metaname(size_t& from)
     return node;
 }
 
+// wcastle/bcastle/ep: position-level predicates that read the "prop"
+// bitboard slot (BBIdx::prop -- packs enpassant square + both sides'
+// castle rights, see ChessBoard::posToBitboards(), chess.cpp), which the
+// evaluator already receives but nothing in the codebase read before this.
+// Handled as NodeType::piece (a plain per-position leaf value, same as K/
+// Q/.../white/black) via an exact keyword match, checked before the
+// single-character piece-letter dispatch in parse_piecename() so there's
+// no ambiguity with "white"/"black"/bishop 'b' despite the shared first
+// letter. No square-set suffix applies to them (they aren't square-
+// indexed), so this returns directly without calling parse_squareset().
+Node* Parser::parse_specialname(size_t& from)
+{
+    assert(from <= lexVec.size());
+
+    auto word = lexVec.at(from);
+    if (word.lex != Lex::string) return nullptr;
+    if (word.string != "wcastle" && word.string != "bcastle" && word.string != "ep") return nullptr;
+
+    auto node = new Node;
+    node->nodeType = NodeType::piece;
+    node->string = word.string;
+    ++from;
+    return node;
+}
+
 Node* Parser::parse_piece(size_t& from)
 {
     assert(from <= lexVec.size());
 
-    auto node = parse_piecename(from);
+    auto node = parse_specialname(from);
+    if (!node) node = parse_piecename(from);
     if (!node) return nullptr;
 
     if (from < lexVec.size()) {
