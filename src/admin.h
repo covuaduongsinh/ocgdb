@@ -101,6 +101,19 @@ public:
     void appendLog(int jobId, const std::string& line);
     std::vector<JobLogLine> getLog(int jobId, int64_t fromSeq) const;
 
+    // ---- Query job results (Phase 2.5) ------------------------------
+    // Structured GameID matches for a "query" task job, parsed by
+    // JobManager::runOne() (jobs.cpp) out of the child process's "N.
+    // gameId: ID" lines as they stream in -- kept separately from JobLog,
+    // which only retains the most recent kMaxLogLinesPerJob lines (a
+    // rolling window unsuitable for "every match", which is the whole
+    // point of running a PQL query as a job instead of the synchronous
+    // /api/query in the first place). Never trimmed by count, only ever
+    // deleted alongside the owning job (clearFinishedJobs() below).
+    void addQueryResults(int jobId, const std::vector<int>& gameIds);
+    std::vector<int> getQueryResults(int jobId, int64_t offset, int64_t limit) const;
+    int64_t countQueryResults(int jobId) const;
+
 private:
     void execSql(const std::string& sql);
     static int64_t nowEpoch();

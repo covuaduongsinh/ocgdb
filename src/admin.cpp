@@ -63,6 +63,12 @@ AdminStore::AdminStore(const std::string& dbPath)
             " Name TEXT PRIMARY KEY,"
             " Value TEXT)");
 
+        execSql(
+            "CREATE TABLE IF NOT EXISTS QueryResults ("
+            " JobID INTEGER,"
+            " GameID INTEGER,"
+            " PRIMARY KEY(JobID, GameID)) WITHOUT ROWID");
+
     } catch (SQLite::Exception& e) {
         std::cerr << "Error: AdminStore could not open/init '" << dbPath << "': " << e.what() << std::endl;
         delete db;
@@ -406,10 +412,63 @@ void AdminStore::clearFinishedJobs()
     if (!db) return;
     try {
         db->exec("DELETE FROM JobLog WHERE JobID IN (SELECT ID FROM Jobs WHERE State IN ('succeeded','failed','cancelled'))");
+        db->exec("DELETE FROM QueryResults WHERE JobID IN (SELECT ID FROM Jobs WHERE State IN ('succeeded','failed','cancelled'))");
         db->exec("DELETE FROM Jobs WHERE State IN ('succeeded','failed','cancelled')");
     } catch (SQLite::Exception& e) {
         std::cerr << "Error: AdminStore::clearFinishedJobs: " << e.what() << std::endl;
     }
+}
+
+void AdminStore::addQueryResults(int jobId, const std::vector<int>& gameIds)
+{
+    if (gameIds.empty()) return;
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (!db) return;
+    try {
+        db->exec("BEGIN");
+        SQLite::Statement ins(*db, "INSERT OR IGNORE INTO QueryResults (JobID, GameID) VALUES (?, ?)");
+        for (auto gameId : gameIds) {
+            ins.reset();
+            ins.bind(1, jobId);
+            ins.bind(2, gameId);
+            ins.exec();
+        }
+        db->exec("COMMIT");
+    } catch (SQLite::Exception& e) {
+        try { db->exec("ROLLBACK"); } catch (...) {}
+        std::cerr << "Error: AdminStore::addQueryResults: " << e.what() << std::endl;
+    }
+}
+
+std::vector<int> AdminStore::getQueryResults(int jobId, int64_t offset, int64_t limit) const
+{
+    std::lock_guard<std::mutex> lk(mutex_);
+    std::vector<int> out;
+    if (!db) return out;
+    try {
+        SQLite::Statement q(*db, "SELECT GameID FROM QueryResults WHERE JobID = ? ORDER BY GameID LIMIT ? OFFSET ?");
+        q.bind(1, jobId);
+        q.bind(2, limit);
+        q.bind(3, offset);
+        while (q.executeStep()) out.push_back(q.getColumn(0).getInt());
+    } catch (SQLite::Exception& e) {
+        std::cerr << "Error: AdminStore::getQueryResults: " << e.what() << std::endl;
+    }
+    return out;
+}
+
+int64_t AdminStore::countQueryResults(int jobId) const
+{
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (!db) return 0;
+    try {
+        SQLite::Statement q(*db, "SELECT COUNT(*) FROM QueryResults WHERE JobID = ?");
+        q.bind(1, jobId);
+        if (q.executeStep()) return q.getColumn(0).getInt64();
+    } catch (SQLite::Exception& e) {
+        std::cerr << "Error: AdminStore::countQueryResults: " << e.what() << std::endl;
+    }
+    return 0;
 }
 
 // --------------------------------------------------------------- Job log

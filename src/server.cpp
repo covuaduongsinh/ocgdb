@@ -73,7 +73,7 @@ namespace {
 const char* GamesParamNames[] = {
     "offset", "limit", "white", "black", "player", "event", "site",
     "result", "eco", "minElo", "maxElo", "dateFrom", "dateTo", "minPly",
-    "sort", "dir", nullptr
+    "sort", "dir", "afterId", "countLimit", nullptr
 };
 
 // Form-encoded params accepted by the various /api/admin/jobs/submit
@@ -688,6 +688,30 @@ void WebServer::runTask()
         res.set_content(adminJobLogJson(id, fromSeq), "application/json; charset=utf-8");
     });
 
+    // Paginated GameID matches for a "query" task job (Phase 2.5) -- see
+    // JobManager::runOne()'s kGameIdRe (jobs.cpp), which persists these
+    // into AdminStore's QueryResults table as the job's child process
+    // runs, independent of and not bounded by JobLog's rolling window.
+    server.Get("/api/admin/jobs/:id/results", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAdminAuth(req, res)) return;
+        auto id = std::atoi(req.path_params.at("id").c_str());
+        int64_t offset = std::max<int64_t>(0, req.has_param("offset") ? std::atoll(req.get_param_value("offset").c_str()) : 0);
+        int64_t limit = req.has_param("limit") ? std::atoll(req.get_param_value("limit").c_str()) : 200;
+        if (limit <= 0) limit = 200;
+        if (limit > 2000) limit = 2000;
+
+        Json j; j.objBegin();
+        j.kv("total", adminStore->countQueryResults(id));
+        j.kv("offset", offset);
+        j.kv("limit", limit);
+        j.key("gameIds");
+        j.arrBegin();
+        for (auto gid : adminStore->getQueryResults(id, offset, limit)) j.val(static_cast<int64_t>(gid));
+        j.arrEnd();
+        j.objEnd();
+        res.set_content(j.str(), "application/json; charset=utf-8");
+    });
+
     server.Post("/api/admin/jobs/submit", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAdminAuth(req, res)) return;
         std::map<std::string, std::string> params;
@@ -1002,6 +1026,21 @@ std::string WebServer::apiGamesJson(const std::map<std::string, std::string>& pa
     else if (sortKey == "plycount" && hasGamesColumn("PlyCount")) sortCol = "g.PlyCount";
     std::string dir = (getP("dir") == "desc") ? "DESC" : "ASC";
 
+    // Keyset pagination (Phase 1.3): "afterId" replaces OFFSET for the
+    // default ID-ascending browse order, so page N+1 costs the same as
+    // page 1 instead of O(offset) -- OFFSET 500000 makes SQLite walk and
+    // discard 500000 rows before it can return anything. Only wired up
+    // for the one sort/direction combination where "greater than the last
+    // ID I saw" is a correct definition of "next page" (g.ID ASC); every
+    // other sort keeps using offset, which the client still sends for
+    // exactly that reason -- see web/js/api.js.
+    int64_t afterId = getP("afterId").empty() ? 0 : std::atoll(getP("afterId").c_str());
+    bool useKeyset = afterId > 0 && sortCol == "g.ID" && dir == "ASC";
+    if (useKeyset) {
+        conds.push_back("g.ID > ?");
+        binds.push_back({1, std::to_string(afterId)});
+    }
+
     std::string whereClause;
     if (!conds.empty()) {
         whereClause = " WHERE ";
@@ -1018,9 +1057,20 @@ std::string WebServer::apiGamesJson(const std::map<std::string, std::string>& pa
         "INNER JOIN Events e ON EventID = e.ID "
         "INNER JOIN Sites s ON SiteID = s.ID";
 
+    // Caps the cost of the COUNT(*) below on a broad filter over a huge
+    // database: wrapping it as "COUNT(*) FROM (SELECT 1 ... LIMIT N)" makes
+    // SQLite stop scanning as soon as it finds N matches, so the count is
+    // an exact number up to N and just "N, and there are more" past it --
+    // the client shows "N+" rather than waiting on (or the server paying
+    // for) a full scan just to display a number nobody is going to read
+    // exactly on a filter that already matches hundreds of thousands of
+    // games.
+    int64_t countLimit = getP("countLimit").empty() ? 0 : std::atoll(getP("countLimit").c_str());
+
     bool filtered = !conds.empty();
     int64_t total = 0;
     bool exactTotal = filtered;
+    bool moreThanCount = false;
 
     if (!filtered && active.db) {
         // Info.GameCount is the project's own authoritative cache (kept in
@@ -1036,25 +1086,31 @@ std::string WebServer::apiGamesJson(const std::map<std::string, std::string>& pa
         }
         exactTotal = true;
     } else if (filtered && active.db) {
-        SQLite::Statement cstmt(*active.db, "SELECT COUNT(*) " + gamesFromJoin + whereClause);
+        std::string countSql = countLimit > 0
+            ? "SELECT COUNT(*) FROM (SELECT 1 " + gamesFromJoin + whereClause + " LIMIT " + std::to_string(countLimit) + ")"
+            : "SELECT COUNT(*) " + gamesFromJoin + whereClause;
+        SQLite::Statement cstmt(*active.db, countSql);
         int idx = 1;
         for (auto&& b : binds) {
             if (b.first == 0) cstmt.bind(idx++, b.second);
             else cstmt.bind(idx++, static_cast<long long>(std::atoll(b.second.c_str())));
         }
         if (cstmt.executeStep()) total = cstmt.getColumn(0).getInt64();
+        if (countLimit > 0 && total >= countLimit) moreThanCount = true;
     }
 
     Json j;
     j.objBegin();
     j.kv("total", total);
+    j.kv("moreThanCount", moreThanCount);
     j.kv("offset", offset);
     j.kv("limit", limit);
-    j.kv("exactTotal", exactTotal);
+    j.kv("exactTotal", exactTotal && !moreThanCount);
 
     j.key("games");
     j.arrBegin();
 
+    int64_t lastId = 0;
     if (active.db) {
         bool hasDate = hasGamesColumn("Date");
         bool hasRound = hasGamesColumn("Round");
@@ -1067,7 +1123,7 @@ std::string WebServer::apiGamesJson(const std::map<std::string, std::string>& pa
         bool hasFen = hasGamesColumn("FEN");
 
         std::string sql = DbRead::fullGameQueryString + whereClause +
-            " ORDER BY " + sortCol + " " + dir + " LIMIT ? OFFSET ?";
+            " ORDER BY " + sortCol + " " + dir + " LIMIT ?" + (useKeyset ? "" : " OFFSET ?");
         SQLite::Statement stmt(*active.db, sql);
         int idx = 1;
         for (auto&& b : binds) {
@@ -1075,9 +1131,10 @@ std::string WebServer::apiGamesJson(const std::map<std::string, std::string>& pa
             else stmt.bind(idx++, static_cast<long long>(std::atoll(b.second.c_str())));
         }
         stmt.bind(idx++, limit);
-        stmt.bind(idx++, offset);
+        if (!useKeyset) stmt.bind(idx++, offset);
 
         while (stmt.executeStep()) {
+            lastId = stmt.getColumn("ID").getInt64();
             j.objBegin();
             j.kv("id", stmt.getColumn("ID").getInt());
             j.kv("event", stmt.getColumn("Event").getString());
@@ -1103,6 +1160,11 @@ std::string WebServer::apiGamesJson(const std::map<std::string, std::string>& pa
     }
 
     j.arrEnd();
+    // The client passes this straight back as "afterId" to fetch the next
+    // page (see web/js/api.js); 0 the sort/direction this page used isn't
+    // ID-ascending, or no rows came back, so there's nothing to key off.
+    if (lastId > 0 && sortCol == "g.ID" && dir == "ASC") j.kv("nextAfterId", lastId);
+    else j.kvNull("nextAfterId");
     j.objEnd();
     return j.str();
 }

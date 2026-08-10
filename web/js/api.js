@@ -127,6 +127,7 @@
     adminJobs(state) { return adminFetch('GET', '/api/admin/jobs', state ? { state } : null); },
     adminJob(id) { return adminFetch('GET', '/api/admin/jobs/' + encodeURIComponent(id)); },
     adminJobLog(id, fromSeq) { return adminFetch('GET', '/api/admin/jobs/' + encodeURIComponent(id) + '/log', { from: fromSeq || 0 }); },
+    adminJobResults(id, offset, limit) { return adminFetch('GET', '/api/admin/jobs/' + encodeURIComponent(id) + '/results', { offset: offset || 0, limit: limit || 200 }); },
     adminSubmitJob(params) { return adminFetch('POST', '/api/admin/jobs/submit', params); },
     adminCancelJob(id) { return adminFetch('POST', '/api/admin/jobs/' + encodeURIComponent(id) + '/cancel'); },
     adminClearJobs() { return adminFetch('POST', '/api/admin/jobs/clear'); },
