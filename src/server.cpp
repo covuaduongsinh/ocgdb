@@ -61,6 +61,7 @@
 #include "server.h"
 #include "json.h"
 #include "process.h"
+#include "engine.h"
 #include "board/funcs.h"
 
 using namespace ocgdb;
@@ -862,6 +863,146 @@ void WebServer::runTask()
                 return true;
             },
             [](bool /*success*/) {}
+        );
+    });
+
+    // ---- UCI engine registration + interactive analysis (Phase 5.1+5.2) ---
+    //
+    // Security note (see engine.h's file comment for the full version):
+    // registering an engine is registering an arbitrary executable this
+    // server will later run with no sandboxing. Acceptable under OCGDB's
+    // personal/localhost threat model (this server only ever binds
+    // 127.0.0.1 -- see server.listen() below); this is exactly why that
+    // constraint exists and must not be relaxed without redesigning auth
+    // first. The engine path is required to pass pathAllowed() just like
+    // every other filesystem-touching admin route.
+
+    server.Get("/api/admin/engines", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAdminAuth(req, res)) return;
+        Json j; j.objBegin();
+        j.key("engines");
+        j.arrBegin();
+        for (auto&& e : adminStore->listEngines()) {
+            j.objBegin().kv("id", e.id).kv("name", e.name).kv("path", e.path).kv("options", e.options).objEnd();
+        }
+        j.arrEnd();
+        j.objEnd();
+        res.set_content(j.str(), "application/json; charset=utf-8");
+    });
+
+    server.Post("/api/admin/engines/add", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAdminAuth(req, res)) return;
+        namespace fs = std::filesystem;
+
+        auto path = req.get_param_value("path");
+        auto name = req.get_param_value("name");
+        auto options = req.get_param_value("options");
+
+        if (path.empty()) {
+            res.status = 400;
+            Json j; j.objBegin().kv("error", "path is required").objEnd();
+            res.set_content(j.str(), "application/json; charset=utf-8");
+            return;
+        }
+        std::string perr;
+        if (!pathAllowed(path, perr)) {
+            res.status = 403;
+            Json j; j.objBegin().kv("error", perr).objEnd();
+            res.set_content(j.str(), "application/json; charset=utf-8");
+            return;
+        }
+        std::error_code ec;
+        if (!fs::exists(path, ec)) {
+            res.status = 400;
+            Json j; j.objBegin().kv("error", "path does not exist: " + path).objEnd();
+            res.set_content(j.str(), "application/json; charset=utf-8");
+            return;
+        }
+        if (name.empty()) name = fs::path(path).filename().string();
+
+        auto id = adminStore->addEngine(name, path, options);
+        Json j; j.objBegin();
+        if (id < 0) j.kv("error", "could not persist engine");
+        else j.kv("id", id);
+        j.objEnd();
+        res.set_content(j.str(), "application/json; charset=utf-8");
+    });
+
+    server.Post("/api/admin/engines/remove", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAdminAuth(req, res)) return;
+        auto id = std::atoi(req.get_param_value("id").c_str());
+        auto ok = adminStore->removeEngine(id);
+        Json j; j.objBegin().kv("ok", ok).objEnd();
+        res.set_content(j.str(), "application/json; charset=utf-8");
+    });
+
+    // Streams live UCI analysis of one position as newline-delimited JSON:
+    // one line per "info depth ... score ... pv ..." update, then a final
+    // {"type":"bestmove",...} line before closing. A fresh engine process
+    // is started, run, and shut down for each call -- simpler and safer
+    // than keeping a long-lived per-session engine alive across requests
+    // (no session/lifetime bookkeeping, nothing to leak if a client just
+    // stops reading), at the cost of paying engine-startup overhead per
+    // analysis request. If the client disconnects mid-search, sink.write()
+    // failing is fed back as EngineProcess::go()'s shouldStop(), which
+    // sends UCI "stop" and lets the engine wind down normally rather than
+    // being killed mid-search.
+    server.Post("/api/analyse", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAdminAuth(req, res)) return;
+
+        auto engineId = std::atoi(req.get_param_value("engineId").c_str());
+        EngineEntry engine;
+        if (!adminStore->getEngine(engineId, engine)) {
+            res.status = 404;
+            Json j; j.objBegin().kv("error", "unknown engine id").objEnd();
+            res.set_content(j.str(), "application/json; charset=utf-8");
+            return;
+        }
+
+        auto fen = req.get_param_value("fen");
+        auto depth = req.has_param("depth") ? std::atoi(req.get_param_value("depth").c_str()) : 0;
+        auto movetimeMs = req.has_param("movetimeMs") ? std::atoi(req.get_param_value("movetimeMs").c_str()) : 0;
+        auto multipv = req.has_param("multipv") ? std::atoi(req.get_param_value("multipv").c_str()) : 1;
+        if (multipv < 1) multipv = 1;
+        if (multipv > 8) multipv = 8;
+
+        auto eng = std::make_shared<EngineProcess>();
+        if (!eng->start(engine.path)) {
+            res.status = 500;
+            Json j; j.objBegin().kv("error", "could not start engine: " + eng->errorString).objEnd();
+            res.set_content(j.str(), "application/json; charset=utf-8");
+            return;
+        }
+        if (multipv > 1) eng->setOption("MultiPV", std::to_string(multipv));
+        eng->newGame();
+        eng->setPositionFen(fen);
+
+        res.set_chunked_content_provider(
+            "application/x-ndjson; charset=utf-8",
+            [eng, depth, movetimeMs](size_t /*offset*/, httplib::DataSink& sink) {
+                bool sinkOk = true;
+                auto best = eng->go(depth, movetimeMs,
+                    [&](const UciInfo& info) {
+                        if (!sinkOk) return;
+                        Json j; j.objBegin().kv("type", "info").kv("depth", info.depth).kv("multipv", info.multipv);
+                        if (info.mate) j.kv("mate", info.mateIn);
+                        else j.kv("scoreCp", info.scoreCp);
+                        j.kv("nodes", info.nodes).kv("nps", info.nps).kv("pv", info.pv).objEnd();
+                        auto chunk = j.str() + "\n";
+                        if (!sink.write(chunk.data(), chunk.size())) sinkOk = false;
+                    },
+                    [&]() { return !sinkOk || (sink.is_writable && !sink.is_writable()); });
+
+                if (sinkOk) {
+                    Json j; j.objBegin().kv("type", "bestmove").kv("move", best).objEnd();
+                    auto chunk = j.str() + "\n";
+                    sink.write(chunk.data(), chunk.size());
+                }
+                eng->stop();
+                sink.done();
+                return false;
+            },
+            [eng](bool /*success*/) { eng->stop(); } // safety net if the provider above never got to run it
         );
     });
 

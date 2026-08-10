@@ -46,6 +46,18 @@ public:
     // the child closes its output pipe. Returns false at end-of-stream.
     bool readLine(std::string& line);
 
+    // Writes `line` followed by '\n' to the child's stdin (for line-based
+    // protocols such as UCI -- see engine.h). Returns false if the process
+    // isn't running or the write failed (the pipe end could already be
+    // closed if the child exited).
+    bool writeLine(const std::string& line);
+
+    // Closes the write end of the child's stdin, signalling EOF to it.
+    // Many command-line protocols (UCI included) treat this the same as
+    // an explicit "quit": safe to call before terminate() for a clean
+    // shutdown instead of an abrupt kill.
+    void closeStdin();
+
     // Requests the child to stop (SIGTERM on POSIX, TerminateProcess on
     // Windows) and reaps it. Safe to call from a thread other than the one
     // that called start()/readLine(). No-op if the process already exited.
@@ -71,9 +83,11 @@ private:
     void* hProcess = nullptr;
     void* hThread = nullptr;
     void* hReadPipe = nullptr;
+    void* hWritePipe = nullptr;
 #else
     int pid = -1;
     int readFd = -1;
+    int writeFd = -1;
 #endif
 };
 

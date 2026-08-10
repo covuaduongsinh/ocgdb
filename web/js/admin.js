@@ -165,6 +165,18 @@
       '</section>' +
 
       '<section class="admin-section">' +
+        '<h2>' + t().t('admin.enginesSection') + '</h2>' +
+        '<p class="muted small">' + t().t('admin.enginesDesc') + '</p>' +
+        '<form class="admin-add-engine-form">' +
+          '<label class="field">' + t().t('admin.engineName') + '<input type="text" name="name"></label>' +
+          '<label class="field">' + t().t('admin.enginePath') + '<input type="text" name="path" required></label>' +
+          '<button type="submit" class="btn btn-small">' + t().t('admin.add') + '</button>' +
+        '</form>' +
+        '<div class="panel-error" data-role="engine-error" hidden></div>' +
+        '<div data-role="engines-table"><div class="panel-loading">' + t().t('common.loading') + '</div></div>' +
+      '</section>' +
+
+      '<section class="admin-section">' +
         '<h2>' + t().t('admin.taskSection') + '</h2>' +
         '<div data-role="task-form"></div>' +
       '</section>' +
@@ -206,6 +218,21 @@
       }
     });
 
+    panel.querySelector('.admin-add-engine-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const errEl = panel.querySelector('[data-role="engine-error"]');
+      errEl.hidden = true;
+      try {
+        await window.OcgdbApi.adminAddEngine(form.name.value.trim(), form.path.value.trim(), '');
+        form.reset();
+        await refreshEngines(panel);
+      } catch (err) {
+        errEl.textContent = localizeError(err.message);
+        errEl.hidden = false;
+      }
+    });
+
     panel.querySelector('[data-act="clear-jobs"]').addEventListener('click', async () => {
       try {
         await window.OcgdbApi.adminClearJobs();
@@ -220,6 +247,7 @@
     await Promise.all([
       refreshStatus(panel),
       refreshDatabases(panel),
+      refreshEngines(panel),
       refreshJobs(panel),
     ]);
   }
@@ -321,6 +349,50 @@
         try {
           await window.OcgdbApi.adminRemoveDatabase(btn.dataset.id);
           await refreshDatabases(panel);
+        } catch (err) {
+          alert(localizeError(err.message));
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+
+  // ------------------------------------------------------------- engines
+
+  async function refreshEngines(panel) {
+    const el = panel.querySelector('[data-role="engines-table"]');
+    if (!el) return;
+    try {
+      const data = await window.OcgdbApi.adminEngines();
+      renderEngines(panel, el, data.engines || []);
+    } catch (err) {
+      if (err.status === 401) { onUnauthorized(panel); return; }
+      el.innerHTML = '<div class="panel-error">' + esc(localizeError(err.message)) + '</div>';
+    }
+  }
+
+  function renderEngines(panel, el, engines) {
+    if (!engines.length) {
+      el.innerHTML = '<div class="panel-empty">' + t().t('admin.noEngines') + '</div>';
+      return;
+    }
+    let html = '<div class="table-scroll"><table class="admin-db-table"><thead><tr>' +
+      '<th>' + t().t('admin.colEngineName') + '</th><th>' + t().t('admin.colEnginePath') + '</th><th></th>' +
+      '</tr></thead><tbody>';
+    engines.forEach((eng) => {
+      html += '<tr><td>' + esc(eng.name) + '</td><td class="muted small">' + esc(eng.path) + '</td>' +
+        '<td><button type="button" class="btn btn-small" data-act="remove-engine" data-id="' + eng.id + '">' + t().t('admin.remove') + '</button></td></tr>';
+    });
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+
+    el.querySelectorAll('[data-act="remove-engine"]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!confirm(t().t('admin.confirmRemove'))) return;
+        btn.disabled = true;
+        try {
+          await window.OcgdbApi.adminRemoveEngine(btn.dataset.id);
+          await refreshEngines(panel);
         } catch (err) {
           alert(localizeError(err.message));
           btn.disabled = false;

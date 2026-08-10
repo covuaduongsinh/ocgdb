@@ -83,6 +83,20 @@ tbody tr:last-child { border-bottom: none; }
 .move:hover { background: var(--bg-sunken); }
 .move-active { background: var(--accent); color: var(--accent-contrast); font-weight: 700; }
 
+.viewer-analysis-wrap { margin-top: 12px; }
+.viewer-analysis-wrap summary { cursor: pointer; font-weight: 600; color: var(--text-muted); }
+.viewer-analysis { margin: 8px 0; }
+.viewer-analysis-controls { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.viewer-analysis-output {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  background: var(--bg-sunken);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  min-height: 1.2em;
+  word-break: break-word;
+}
+
 .viewer-pgn-wrap { margin-top: 12px; }
 .viewer-pgn-wrap summary { cursor: pointer; font-weight: 600; color: var(--text-muted); }
 .viewer-pgn {
