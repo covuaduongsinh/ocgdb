@@ -14,6 +14,7 @@
 #include <iostream>
 #include <sstream>
 #include <unordered_map>
+#include <set>
 
 #include "chess.h"
 
@@ -2871,6 +2872,24 @@ static const std::unordered_map<uint64_t, std::string> ecoMap
     {18400753095161218296ULL, "A88;Dutch; Leningrad, main variation with c6"},{18415784667315910130ULL, "A80;Dutch, Korchnoi attack"},{18417542882991751896ULL, "C23;Bishop's opening; Calabrese counter-gambit"},{18424396128252022114ULL, "C37;KGA; Lolli gambit, Young variation"},
     
 };
+
+std::vector<std::pair<std::string, std::string>> ChessBoard::getAllEcoNames()
+{
+    std::vector<std::pair<std::string, std::string>> result;
+    std::set<std::string> seen;
+    for (auto&& kv : ecoMap) {
+        auto vec = Funcs::splitString(kv.second, ';');
+        if (vec.size() < 2 || vec[0].empty()) continue;
+        if (!seen.insert(vec[0]).second) continue; // already have a name for this ECO code
+
+        auto name = vec[1];
+        Funcs::trim(name);
+        if (name.empty()) continue;
+
+        result.emplace_back(vec[0], name);
+    }
+    return result;
+}
 
 std::string ChessBoard::getLastEcoString() const
 {

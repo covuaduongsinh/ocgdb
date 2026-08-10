@@ -51,7 +51,14 @@ protected:
 
     virtual void updateInfoTable();
 
-    
+    // Commits whatever transaction processPGNGameWithAThread() left open
+    // (it only auto-commits every TransactionCommit games -- the tail
+    // batch, almost always the common case for -merge's typically-small
+    // PGN batches, needs an explicit final commit or it's silently rolled
+    // back when the connection closes). transactionCnt/sendTransaction()
+    // are private to Builder, so subclasses (AddGame) need this wrapper.
+    void commitPendingTransaction();
+
 private:
 
     bool createInsertStatements(SQLite::Database& mDb);

@@ -46,6 +46,8 @@
 #include <iomanip>
 #include <fstream>
 #include <thread>
+#include <tuple>
+#include <unordered_map>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -747,6 +749,11 @@ std::string WebServer::apiInfoJson() const
     // whether to show opening-tree stats next to the board.
     j.kv("hasOpeningTree", DbRead::hasTable(active.db, "OpeningTree"));
 
+    // Whether -o parseeval was used and -o index has resolved ECO names --
+    // see builder.cpp/addgame.cpp and getAllEcoNames() (chess.cpp).
+    j.kv("hasEvals", DbRead::hasTable(active.db, "Evals"));
+    j.kv("hasOpenings", DbRead::hasTable(active.db, "Openings"));
+
     j.kv("dbPath", active.path);
 
     j.objEnd();
@@ -1021,8 +1028,38 @@ std::string WebServer::apiGameDetailJson(int id, bool& found) const
     }
     j.objEnd();
 
+    // Games.ECO only ever stored the bare 3-character code (see
+    // Builder::createDb()'s ECO handling, builder.cpp); Openings (built
+    // from the same static reference table every -create run populates
+    // it from, see chess.cpp's getAllEcoNames()) resolves it to a real
+    // name when available.
+    {
+        auto ecoIt = record.tags.find("ECO");
+        if (ecoIt != record.tags.end() && !ecoIt->second.empty() &&
+            active.db && DbRead::hasTable(active.db, "Openings")) {
+            SQLite::Statement stmt(*active.db, "SELECT Name FROM Openings WHERE ECO = ?");
+            stmt.bind(1, ecoIt->second);
+            if (stmt.executeStep()) {
+                j.kv("openingName", stmt.getColumn(0).getString());
+            }
+        }
+    }
+
     j.kv("startFen", record.fenText);
     j.kv("firstComment", board->getFirstComment());
+
+    // Ply -> engine eval, if this database has one (-o parseeval, see
+    // builder.cpp/addgame.cpp); attached to each move below.
+    std::unordered_map<int, std::tuple<int64_t, int64_t, int64_t>> evalByPly; // ply -> (depth, score, mate)
+    if (active.db && DbRead::hasTable(active.db, "Evals")) {
+        SQLite::Statement stmt(*active.db, "SELECT Ply, Depth, Score, Mate FROM Evals WHERE GameID = ?");
+        stmt.bind(1, id);
+        while (stmt.executeStep()) {
+            evalByPly[stmt.getColumn("Ply").getInt()] = {
+                stmt.getColumn("Depth").getInt64(), stmt.getColumn("Score").getInt64(), stmt.getColumn("Mate").getInt64()
+            };
+        }
+    }
 
     auto histList = board->getHistList();
 
@@ -1053,6 +1090,19 @@ std::string WebServer::apiGameDetailJson(int id, bool& found) const
         j.kv("to", h.move.dest);
         j.kv("fen", h.fenString);
         j.kv("comment", h.comment);
+
+        auto evalIt = evalByPly.find(static_cast<int>(i));
+        if (evalIt != evalByPly.end()) {
+            j.key("eval");
+            j.objBegin();
+            j.kv("depth", std::get<0>(evalIt->second));
+            j.kv("score", std::get<1>(evalIt->second));
+            j.kv("mate", std::get<2>(evalIt->second));
+            j.objEnd();
+        } else {
+            j.kvNull("eval");
+        }
+
         j.objEnd();
     }
     j.arrEnd();

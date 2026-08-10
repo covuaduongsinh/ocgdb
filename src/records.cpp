@@ -217,6 +217,7 @@ static const std::map<std::string, int> optionNameMap = {
     {"discardfen", 7},
     {"reseteco", 8},
     {"index", 9}, // for -create: build the standard secondary indexes right after creating
+    {"parseeval", 13}, // for -create/-merge: extract engine-analysis comments into Evals
 
     // query
     {"printall", 10},
@@ -366,12 +367,14 @@ void ThreadRecord::deleteAllStatements()
 {
     if (insertGameStatement) delete insertGameStatement;
     if (insertCommentStatement) delete insertCommentStatement;
+    if (insertEvalStatement) delete insertEvalStatement;
     if (removeGameStatement) delete removeGameStatement;
     if (getGameStatement) delete getGameStatement;
     if (queryComments) delete queryComments;
     if (qgr) delete qgr;
     insertGameStatement = nullptr;
     insertCommentStatement = nullptr;
+    insertEvalStatement = nullptr;
     removeGameStatement = nullptr;
     getGameStatement = nullptr;
     queryComments = nullptr;

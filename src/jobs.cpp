@@ -53,8 +53,9 @@ bool isTruthy(const std::string& s)
 // verbatim, so it stays a strict allow-list, not a denylist.
 const std::set<std::string> kCreateOpts = {
     "moves", "moves1", "moves2", "acceptnewtags", "discardcomments",
-    "discardsites", "discardnoelo", "discardfen", "reseteco", "nobot", "bot", "index",
+    "discardsites", "discardnoelo", "discardfen", "reseteco", "nobot", "bot", "index", "parseeval",
 };
+const std::set<std::string> kMergeOpts = { "parseeval" };
 const std::set<std::string> kDupOpts = { "remove", "printall", "embededgames" };
 const std::set<std::string> kQueryOpts = { "printpgn", "printall", "printfen" };
 const std::set<std::string> kOptimizeOpts = { "vacuum", "integrity" };
@@ -174,10 +175,15 @@ bool ocgdb::buildJobArgv(const std::string& task,
             if (!checkExists(p, err)) return false;
         }
 
+        std::string optsFiltered;
+        auto opts = getP(params, "opts");
+        if (!opts.empty() && !filterOpts(opts, kMergeOpts, optsFiltered, err)) return false;
+
         argv.push_back("-merge");
         argv.push_back("-db"); argv.push_back(dbDest);
         for (auto&& p : dbSources) { argv.push_back("-db"); argv.push_back(p); }
         for (auto&& p : pgns) { argv.push_back("-pgn"); argv.push_back(p); }
+        if (!optsFiltered.empty()) { argv.push_back("-o"); argv.push_back(optsFiltered); }
 
         writeTargetPath = dbDest;
         paramsText = "merge into " + dbDest;

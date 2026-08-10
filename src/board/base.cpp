@@ -669,25 +669,25 @@ void BoardCore::_parseComment_standard(const std::string& comment, Hist& hist)
             }
 
             es.depth = std::atoi(s1.c_str());
-            es.elapsedInMillisecond = std::atof(commentVec.at(1).c_str());
+            // time field is seconds (e.g. "0.5s"); elapsedInMillisecond is milliseconds
+            es.elapsedInMillisecond = static_cast<int>(std::atof(commentVec.at(1).c_str()) * 1000);
 
             if (commentVec.size() <= 2) {
                 commentVec.clear();
-                return;
-            }
-
-            commentVec.erase(commentVec.begin()); // delete score/depth
-            commentVec.erase(commentVec.begin()); // delete time
-
-            if (isdigit(commentVec.front().at(0))) {
-                es.nodes = std::atoll(commentVec.front().c_str());
-                commentVec.erase(commentVec.begin()); // delete nodes
-            }
-
-            if (commentVec.size() >= 2 && commentVec.front() == ";") {
-                commentVec.erase(commentVec. begin());
             } else {
-                commentVec.clear();
+                commentVec.erase(commentVec.begin()); // delete score/depth
+                commentVec.erase(commentVec.begin()); // delete time
+
+                if (isdigit(commentVec.front().at(0))) {
+                    es.nodes = std::atoll(commentVec.front().c_str());
+                    commentVec.erase(commentVec.begin()); // delete nodes
+                }
+
+                if (commentVec.size() >= 2 && commentVec.front() == ";") {
+                    commentVec.erase(commentVec. begin());
+                } else {
+                    commentVec.clear();
+                }
             }
         }
     }
