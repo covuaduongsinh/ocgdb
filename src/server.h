@@ -127,6 +127,14 @@ private:
     // Callers must hold dbMutex (exclusively) already; these do not lock.
     bool openActiveDbLocked(const std::string& path, std::string& err);
     void closeActiveDbLocked();
+
+    // Marks Info.DerivedStale = 1 on `wdb` (a writable connection the
+    // caller already owns) -- called at the end of every write route
+    // (Phase 4.3) so /api/info can tell the UI "GameMaterial/OpeningTree/
+    // Evals/GameTree may no longer reflect the game data" without this
+    // server trying to silently re-run any of those itself (they're
+    // full-database rebuild tasks, not incremental).
+    void markDerivedStaleLocked(SQLite::Database& wdb) const;
     // Closes the current active db (if any) and opens `path` in its place,
     // taking dbMutex itself. Used at startup and by
     // /api/admin/databases/activate.

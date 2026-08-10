@@ -241,6 +241,17 @@ void WebServer::closeActiveDbLocked()
     // (still) selected even while it's momentarily closed for a job.
 }
 
+void WebServer::markDerivedStaleLocked(SQLite::Database& wdb) const
+{
+    try {
+        wdb.exec("INSERT OR REPLACE INTO Info (Name, Value) VALUES ('DerivedStale', '1')");
+    } catch (SQLite::Exception&) {
+        // Best-effort: a write route that already succeeded shouldn't be
+        // reported as failed just because this bookkeeping row didn't
+        // update -- the UI simply won't show the staleness warning.
+    }
+}
+
 bool WebServer::activateDatabase(const std::string& path, std::string& err)
 {
     std::unique_lock<std::shared_mutex> lock(dbMutex);
@@ -866,6 +877,148 @@ void WebServer::runTask()
         );
     });
 
+    // ---- small write API: edit a comment, delete a game (Phase 4.3) -------
+    //
+    // Deliberately narrow scope: comment edits and whole-game deletion are
+    // both self-contained (no cross-table player/event identity questions
+    // to resolve), unlike tag edits (renaming "White" would mean either
+    // repointing WhiteID at a different/new Players row or renaming that
+    // row out from under every other game referencing it -- a bigger,
+    // separate design question left for later). Every write here takes
+    // dbMutex *exclusively* (blocking concurrent reads for the brief
+    // duration of the write, per the plan's guidance) and opens its own
+    // short-lived OPEN_READWRITE connection rather than keeping one
+    // around -- `active.db` stays OPEN_READONLY throughout, matching
+    // every other route's assumption about it.
+    server.Post("/api/admin/game/:id/comment", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAdminAuth(req, res)) return;
+        auto id = std::atoi(req.path_params.at("id").c_str());
+        auto ply = req.has_param("ply") ? std::atoi(req.get_param_value("ply").c_str()) : -1;
+        auto comment = req.get_param_value("comment");
+
+        std::unique_lock<std::shared_mutex> lock(dbMutex);
+        if (active.path.empty()) {
+            res.status = 503;
+            Json j; j.objBegin().kv("error", "no active database").objEnd();
+            res.set_content(j.str(), "application/json; charset=utf-8");
+            return;
+        }
+        try {
+            SQLite::Database wdb(active.path, SQLite::OPEN_READWRITE);
+
+            // Comments.Nag (Phase 3.1, -o keepvariations) is a separate
+            // concern from this route's plain-text comment editing --
+            // preserve whatever NAG value the row already has instead of
+            // silently discarding it on every comment edit.
+            bool hasNag = false;
+            {
+                SQLite::Statement info(wdb, "PRAGMA table_info(Comments)");
+                while (info.executeStep()) {
+                    if (info.getColumn("name").getString() == "Nag") { hasNag = true; break; }
+                }
+            }
+            int64_t existingNag = 0;
+            if (hasNag) {
+                SQLite::Statement q(wdb, "SELECT Nag FROM Comments WHERE GameID = ? AND Ply = ?");
+                q.bind(1, id);
+                q.bind(2, ply);
+                if (q.executeStep()) existingNag = q.getColumn(0).getInt64();
+            }
+
+            SQLite::Statement del(wdb, "DELETE FROM Comments WHERE GameID = ? AND Ply = ?");
+            del.bind(1, id);
+            del.bind(2, ply);
+            del.exec();
+
+            if (!comment.empty() || existingNag != 0) {
+                if (hasNag) {
+                    SQLite::Statement ins(wdb, "INSERT INTO Comments (GameID, Ply, Comment, Nag) VALUES (?, ?, ?, ?)");
+                    ins.bind(1, id); ins.bind(2, ply); ins.bind(3, comment); ins.bind(4, existingNag);
+                    ins.exec();
+                } else {
+                    SQLite::Statement ins(wdb, "INSERT INTO Comments (GameID, Ply, Comment) VALUES (?, ?, ?)");
+                    ins.bind(1, id); ins.bind(2, ply); ins.bind(3, comment);
+                    ins.exec();
+                }
+            }
+            markDerivedStaleLocked(wdb);
+
+            Json j; j.objBegin().kv("ok", true).objEnd();
+            res.set_content(j.str(), "application/json; charset=utf-8");
+        } catch (SQLite::Exception& e) {
+            res.status = 500;
+            Json j; j.objBegin().kv("error", std::string("database error: ") + e.what()).objEnd();
+            res.set_content(j.str(), "application/json; charset=utf-8");
+        }
+    });
+
+    server.Post("/api/admin/game/:id/delete", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAdminAuth(req, res)) return;
+        auto id = std::atoi(req.path_params.at("id").c_str());
+
+        std::unique_lock<std::shared_mutex> lock(dbMutex);
+        if (active.path.empty()) {
+            res.status = 503;
+            Json j; j.objBegin().kv("error", "no active database").objEnd();
+            res.set_content(j.str(), "application/json; charset=utf-8");
+            return;
+        }
+
+        // Close the read-only connection for the duration of the delete --
+        // simplest way to guarantee no stale-cached statement/row is read
+        // back through it immediately after a structural change, and
+        // matches how JobManager's write jobs already coordinate with
+        // this same active.db (onJobStartCloseIfActive/onJobEndReopenIfActive).
+        closeActiveDbLocked();
+
+        bool found = false;
+        std::string writeErr;
+        try {
+            SQLite::Database wdb(active.path, SQLite::OPEN_READWRITE);
+            wdb.exec("BEGIN");
+
+            SQLite::Statement delG(wdb, "DELETE FROM Games WHERE ID = ?");
+            delG.bind(1, id);
+            delG.exec();
+            found = wdb.execAndGet("SELECT changes()").getInt() > 0;
+
+            if (found) {
+                SQLite::Statement delC(wdb, "DELETE FROM Comments WHERE GameID = ?");
+                delC.bind(1, id);
+                delC.exec();
+                for (auto&& table : { "Evals", "GameTree", "GameMaterial" }) {
+                    if (DbRead::hasTable(&wdb, table)) {
+                        SQLite::Statement delD(wdb, std::string("DELETE FROM ") + table + " WHERE GameID = ?");
+                        delD.bind(1, id);
+                        delD.exec();
+                    }
+                }
+                wdb.exec("UPDATE Info SET Value = CAST(Value AS INTEGER) - 1 "
+                         "WHERE Name = 'GameCount' AND CAST(Value AS INTEGER) > 0");
+                markDerivedStaleLocked(wdb);
+            }
+            wdb.exec("COMMIT");
+        } catch (SQLite::Exception& e) {
+            writeErr = e.what();
+        }
+
+        std::string reopenErr;
+        openActiveDbLocked(active.path, reopenErr); // reopen regardless -- restores the read path either way
+
+        Json j; j.objBegin();
+        if (!writeErr.empty()) {
+            res.status = 500;
+            j.kv("error", "database error: " + writeErr);
+        } else if (!found) {
+            res.status = 404;
+            j.kv("error", "unknown game id");
+        } else {
+            j.kv("ok", true);
+        }
+        j.objEnd();
+        res.set_content(j.str(), "application/json; charset=utf-8");
+    });
+
     // ---- UCI engine registration + interactive analysis (Phase 5.1+5.2) ---
     //
     // Security note (see engine.h's file comment for the full version):
@@ -1079,6 +1232,19 @@ std::string WebServer::apiInfoJson() const
     // see builder.cpp/addgame.cpp and getAllEcoNames() (chess.cpp).
     j.kv("hasEvals", DbRead::hasTable(active.db, "Evals"));
     j.kv("hasOpenings", DbRead::hasTable(active.db, "Openings"));
+
+    // Set by markDerivedStaleLocked() (Phase 4.3) after any write route
+    // edits game data -- GameMaterial/OpeningTree/Evals/GameTree are all
+    // full-rebuild derived tables, so a targeted edit can't keep them in
+    // sync itself; this just tells the UI to prompt for a re-run.
+    {
+        bool stale = false;
+        try {
+            SQLite::Statement q(*active.db, "SELECT Value FROM Info WHERE Name = 'DerivedStale'");
+            if (q.executeStep()) stale = q.getColumn(0).getString() == "1";
+        } catch (SQLite::Exception&) {}
+        j.kv("derivedStale", stale);
+    }
 
     j.kv("dbPath", active.path);
 

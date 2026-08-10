@@ -40,10 +40,11 @@ tbody tr:last-child { border-bottom: none; }
 .pager-info { color: var(--text-muted); font-size: 0.85rem; }
 
 /* --------------------------------------------------------------- viewer */
-.viewer-header { margin-bottom: 12px; }
+.viewer-header { margin-bottom: 12px; display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .viewer-players { font-size: 1.1rem; }
 .viewer-result { margin-left: 8px; font-weight: 700; color: var(--accent-strong); }
 .viewer-meta { margin-top: 2px; font-size: 0.85rem; }
+.viewer-delete-btn { color: var(--danger); border-color: var(--danger); flex: 0 0 auto; }
 
 .viewer-body { display: flex; gap: 20px; flex-wrap: wrap; }
 .viewer-board-col { flex: 1 1 320px; max-width: 420px; min-width: 240px; }
@@ -58,12 +59,27 @@ tbody tr:last-child { border-bottom: none; }
 }
 .viewer-plycount { margin-left: auto; font-size: 0.8rem; }
 
+.viewer-comment-row { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; }
 .viewer-comment {
-  margin-top: 8px;
   font-style: italic;
   font-size: 0.85rem;
   min-height: 1.2em;
+  flex: 1 1 auto;
+  margin-top: 0;
 }
+.viewer-comment-edit { margin-top: 6px; }
+.viewer-comment-edit textarea {
+  width: 100%;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text);
+  resize: vertical;
+}
+.viewer-comment-edit-actions { display: flex; gap: 6px; margin-top: 6px; }
 
 .viewer-moves {
   display: flex;
