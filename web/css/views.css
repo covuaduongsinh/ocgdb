@@ -303,6 +303,9 @@ tbody tr:last-child { border-bottom: none; }
   cursor: pointer;
 }
 
+.admin-upload { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.admin-upload-btn { display: inline-flex; align-items: center; cursor: pointer; }
+
 .admin-cmdline-preview {
   margin-top: 10px;
   display: flex;

@@ -430,6 +430,14 @@ void WebServer::runTask()
     httplib::Server server;
     svr = &server;
 
+    // Default is 8KB (fine for every JSON/form route here); raised for
+    // /api/admin/upload, which needs to accept whole PGN files. httplib
+    // buffers a multipart upload fully in memory before the route handler
+    // runs (see MultipartFormData::get_file() below), so this is also an
+    // upper bound on the RAM a single upload can consume -- generous enough
+    // for realistic PGN files without allowing an unbounded one.
+    server.set_payload_max_length(512 * 1024 * 1024);
+
     server.set_mount_point("/", webDir);
     server.set_file_extension_and_mimetype_mapping("js", "text/javascript; charset=utf-8");
     server.set_file_extension_and_mimetype_mapping("mjs", "text/javascript; charset=utf-8");
@@ -678,6 +686,125 @@ void WebServer::runTask()
         adminStore->clearFinishedJobs();
         Json j; j.objBegin().kv("ok", true).objEnd();
         res.set_content(j.str(), "application/json; charset=utf-8");
+    });
+
+    // Browser PGN upload: saves the multipart file to <root>/uploads (or,
+    // with no -root, next to the admin db -- same fallback admin-token.txt
+    // uses) and returns the server-side path, which the client then feeds
+    // back in as the "pgn" param of a normal /api/admin/jobs/submit call.
+    // Job submission itself still only ever accepts server-side paths (see
+    // buildJobArgv(), jobs.cpp) -- this route's only job is turning "a file
+    // the browser has open" into one of those.
+    server.Post("/api/admin/upload", [this, adminDbPath](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAdminAuth(req, res)) return;
+        namespace fs = std::filesystem;
+
+        if (!req.form.has_file("file")) {
+            res.status = 400;
+            Json j; j.objBegin().kv("error", "missing 'file' part").objEnd();
+            res.set_content(j.str(), "application/json; charset=utf-8");
+            return;
+        }
+        auto file = req.form.get_file("file");
+        if (file.content.empty()) {
+            res.status = 400;
+            Json j; j.objBegin().kv("error", "uploaded file is empty").objEnd();
+            res.set_content(j.str(), "application/json; charset=utf-8");
+            return;
+        }
+
+        // Keep only the basename -- some browsers/OSes send a full local
+        // path as the filename, and this must never reach the destination
+        // path unsanitized (directory traversal via "../../etc").
+        auto baseName = fs::path(file.filename).filename().string();
+        if (baseName.empty() || baseName == "." || baseName == "..") baseName = "upload.pgn";
+
+        auto uploadDir = paraRecord.rootDir.empty()
+            ? (fs::path(adminDbPath).parent_path() / "uploads")
+            : (fs::path(paraRecord.rootDir) / "uploads");
+        std::error_code ec;
+        fs::create_directories(uploadDir, ec);
+
+        // Random prefix so two uploads named the same never collide.
+        auto destPath = (uploadDir / (randomHexToken(8) + "_" + baseName)).string();
+        std::string perr;
+        if (!pathAllowed(destPath, perr)) {
+            res.status = 403;
+            Json j; j.objBegin().kv("error", perr).objEnd();
+            res.set_content(j.str(), "application/json; charset=utf-8");
+            return;
+        }
+
+        std::ofstream out(destPath, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            res.status = 500;
+            Json j; j.objBegin().kv("error", "could not write uploaded file").objEnd();
+            res.set_content(j.str(), "application/json; charset=utf-8");
+            return;
+        }
+        out.write(file.content.data(), static_cast<std::streamsize>(file.content.size()));
+        out.close();
+
+        Json j; j.objBegin().kv("path", destPath).kv("size", static_cast<int64_t>(file.content.size())).objEnd();
+        res.set_content(j.str(), "application/json; charset=utf-8");
+    });
+
+    // Streams a job's log lines + periodic status snapshots over one
+    // held chunked HTTP connection, replacing the client's previous
+    // separate polling of /jobs/:id (every 1.5s) and /jobs/:id/log (every
+    // 1.2s) -- see web/js/admin.js. Not true event-driven push: AdminStore/
+    // JobManager have no change-notification hook, so this polls
+    // internally instead (immediately again while there's backlog to
+    // drain, ~400ms sleep once caught up), just from inside one server-held
+    // connection rather than many client-issued requests. EventSource is
+    // deliberately NOT used to receive this: it cannot set the
+    // X-OCGDB-Token header, the only auth this server has (checkAdminAuth
+    // above) -- the client reads this via fetch() + ReadableStream instead.
+    server.Get("/api/admin/jobs/:id/stream", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAdminAuth(req, res)) return;
+        auto jobId = std::atoi(req.path_params.at("id").c_str());
+
+        JobEntry probeJob;
+        if (!adminStore->getJob(jobId, probeJob)) {
+            res.status = 404;
+            Json j; j.objBegin().kv("error", "unknown job id").objEnd();
+            res.set_content(j.str(), "application/json; charset=utf-8");
+            return;
+        }
+
+        auto lastSeq = std::make_shared<int64_t>(req.has_param("from") ? std::atoll(req.get_param_value("from").c_str()) : 0);
+
+        res.set_chunked_content_provider(
+            "application/x-ndjson; charset=utf-8",
+            [this, jobId, lastSeq](size_t /*offset*/, httplib::DataSink& sink) {
+                auto lines = adminStore->getLog(jobId, *lastSeq);
+                for (auto&& l : lines) {
+                    Json j; j.objBegin().kv("type", "log").kv("seq", l.seq).kv("line", l.line).objEnd();
+                    auto chunk = j.str() + "\n";
+                    if (!sink.write(chunk.data(), chunk.size())) return false;
+                    *lastSeq = l.seq;
+                }
+
+                JobEntry job;
+                if (!adminStore->getJob(jobId, job)) { sink.done(); return false; }
+                bool finished = job.state != "queued" && job.state != "running";
+
+                Json sj; sj.objBegin().kv("type", "status").kv("state", job.state)
+                    .kv("progress", job.progress).kv("progressTotal", job.progressTotal)
+                    .kv("gameCnt", job.gameCnt).kv("exitCode", job.exitCode);
+                if (!job.error.empty()) sj.kv("error", job.error);
+                sj.kv("final", finished).objEnd();
+                auto schunk = sj.str() + "\n";
+                if (!sink.write(schunk.data(), schunk.size())) return false;
+
+                if (finished) { sink.done(); return false; }
+                if (!lines.empty()) return true; // more backlog may remain -- drain it now
+                if (sink.is_writable && !sink.is_writable()) return false; // client gone
+                std::this_thread::sleep_for(std::chrono::milliseconds(400));
+                return true;
+            },
+            [](bool /*success*/) {}
+        );
     });
 
     std::cout << "Web UI folder: " << webDir << std::endl;
