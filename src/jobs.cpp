@@ -348,13 +348,19 @@ bool ocgdb::buildJobArgv(const std::string& task,
         if (!checkPath(pathFilter, db, err)) return false;
         if (!checkExists(db, err)) return false;
 
-        std::string opts;
-        auto printFormat = getP(params, "printFormat");
-        if (printFormat == "printpgn" || printFormat == "printall") opts = printFormat;
+        // "printall" is always forced on (not just when the user picks it)
+        // so every match prints a parseable "N. gameId: ID" line -- see
+        // JobManager::runOne()'s kGameIdRe, jobs.cpp, which reads exactly
+        // that format to persist structured results into AdminStore's
+        // QueryResults table (Phase 2.5) as the job runs, independent of
+        // whatever the user separately picked for on-screen log output
+        // (printpgn also dumping full PGN text into the log).
+        std::string opts = "printall";
+        if (getP(params, "printFormat") == "printpgn") opts += ",printpgn";
 
         argv.push_back("-db"); argv.push_back(db);
         argv.push_back("-q"); argv.push_back(pql);
-        if (!opts.empty()) { argv.push_back("-o"); argv.push_back(opts); }
+        argv.push_back("-o"); argv.push_back(opts);
         if (!getP(params, "report").empty()) {
             if (!checkPath(pathFilter, getP(params, "report"), err)) return false;
             argv.push_back("-r"); argv.push_back(getP(params, "report"));
@@ -397,6 +403,7 @@ void JobManager::stop()
 int JobManager::submit(const std::string& task, const std::map<std::string, std::string>& params, std::string& err)
 {
     QueuedJob job;
+    job.task = task;
     std::string paramsText;
     if (!buildJobArgv(task, params, pathFilter, job.argv, paramsText, job.writeTargetPath, err)) {
         return -1;
@@ -471,6 +478,23 @@ void JobManager::runOne(const QueuedJob& job)
     static const std::regex kProgressRe(
         R"(@@PROGRESS\s+games=(\d+)(?:\s+elapsed=\d+)?(?:\s+bytes=(\d+))?(?:\s+total=(\d+))?)");
     static const std::regex kStatsRe(R"(#games:\s*(\d+))");
+    // Matches Search::runTask()'s per-match line (search.cpp, gated on the
+    // "printall" option this job's argv always includes for task=="query"
+    // -- see buildJobArgv() above): "<N>. gameId: <ID>".
+    static const std::regex kGameIdRe(R"(^\d+\.\s+gameId:\s+(-?\d+)\s*$)");
+    const bool isQueryJob = (job.task == "query");
+    // Buffered and flushed periodically rather than one INSERT (and one
+    // AdminStore mutex lock) per match -- a broad, unfiltered PQL scan can
+    // match hundreds of thousands of games, exactly the case this exists
+    // to support well.
+    std::vector<int> pendingResults;
+    const size_t kFlushEvery = 5000;
+    auto flushResults = [&]() {
+        if (!pendingResults.empty() && store) {
+            store->addQueryResults(job.id, pendingResults);
+            pendingResults.clear();
+        }
+    };
 
     auto child = new ChildProcess();
     {
@@ -490,10 +514,29 @@ void JobManager::runOne(const QueuedJob& job)
         std::string line;
         int64_t lastGames = 0, lastBytes = 0, lastTotal = 0;
         while (child->readLine(line)) {
-            if (store) store->appendLog(job.id, line);
-
             std::smatch m;
-            if (std::regex_search(line, m, kProgressRe)) {
+
+            // A query job's "printall" output is one line per match --
+            // for a broad scan that can be hundreds of thousands of
+            // lines. Route those into the batched QueryResults path below
+            // instead of appendLog(), which does one synchronous INSERT
+            // (its own implicit transaction) per line: appending all of
+            // them made a query that finishes in ~150ms as `-q` on the
+            // command line take upwards of 40s as a job, almost entirely
+            // JobLog insert overhead for data QueryResults already
+            // captures far more cheaply. Every other line (headers,
+            // @@PROGRESS, the final summary) still goes to the log as
+            // before -- this only skips the redundant, high-volume case.
+            bool isGameIdLine = isQueryJob && std::regex_search(line, m, kGameIdRe);
+            if (!isGameIdLine && store) store->appendLog(job.id, line);
+
+            if (isGameIdLine) {
+                auto gameId = std::stoi(m[1].str());
+                if (gameId > 0) {
+                    pendingResults.push_back(gameId);
+                    if (pendingResults.size() >= kFlushEvery) flushResults();
+                }
+            } else if (std::regex_search(line, m, kProgressRe)) {
                 lastGames = std::stoll(m[1].str());
                 if (m[2].matched) lastBytes = std::stoll(m[2].str());
                 if (m[3].matched) lastTotal = std::stoll(m[3].str());
@@ -503,6 +546,7 @@ void JobManager::runOne(const QueuedJob& job)
                 if (store) store->setJobProgress(job.id, lastBytes, lastTotal, lastGames);
             }
         }
+        flushResults();
         exitCode = child->wait();
         state = (exitCode == 0) ? "succeeded" : "failed";
         if (exitCode != 0) errText = "process exited with code " + std::to_string(exitCode);

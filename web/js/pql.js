@@ -30,6 +30,7 @@
         '<label class="field pql-limit-field">' + t().t('pql.limit') +
           '<input type="number" name="limit" value="100" min="1" max="2000"></label>' +
         '<button type="submit" class="btn btn-primary">' + t().t('pql.run') + '</button>' +
+        '<button type="button" class="btn btn-small" data-act="run-job">' + t().t('pql.runAsJob') + '</button>' +
       '</form>' +
       '<div class="pql-examples">' +
         '<span class="muted">' + t().t('pql.examples') + ':</span> ' +
@@ -52,6 +53,11 @@
       run();
     });
 
+    form.querySelector('[data-act="run-job"]').addEventListener('click', () => {
+      const q = input.value.trim();
+      if (q) runAsJob(panel, q);
+    });
+
     function run() {
       const q = input.value.trim();
       const limit = Number(form.querySelector('[name="limit"]').value) || 100;
@@ -60,6 +66,100 @@
     }
 
     if (initialQ) runQuery(panel, initialQ, 100);
+  }
+
+  // Submits the current query as a background job (Phase 2.5) instead of
+  // the synchronous GET /api/query above -- for a scan too large to
+  // finish inside one HTTP request/browser tab lifetime on a big,
+  // unfiltered database. Requires the admin token (job submission is an
+  // admin-only action); tracks it via the same streamed connection the
+  // Admin tab's job modal uses (adminJobStream, api.js) rather than
+  // reimplementing polling here, then paginates the matched GameIDs from
+  // AdminStore's QueryResults table once the job finishes.
+  async function runAsJob(panel, q) {
+    const resultsEl = panel.querySelector('.pql-results');
+    if (!window.OcgdbApi.hasAdminToken()) {
+      resultsEl.innerHTML = '<div class="panel-error">' + t().t('pql.jobNeedsToken') + '</div>';
+      return;
+    }
+    resultsEl.innerHTML = '<div class="panel-loading">' + t().t('common.loading') + '</div>';
+
+    let info;
+    try { info = await window.OcgdbApi.info(); } catch (e) { /* fall through to the not-loaded message below */ }
+    if (!info || !info.dbPath) {
+      resultsEl.innerHTML = '<div class="panel-error">' + t().t('common.dbNotLoaded') + '</div>';
+      return;
+    }
+
+    let jobId;
+    try {
+      const res = await window.OcgdbApi.adminSubmitJob({ task: 'query', db: info.dbPath, pql: q });
+      jobId = res.id;
+    } catch (err) {
+      resultsEl.innerHTML = '<div class="panel-error">' + esc(err.message) + '</div>';
+      return;
+    }
+
+    resultsEl.innerHTML =
+      '<div class="pql-job-status" data-role="job-status">' + t().t('pql.jobRunning', { id: jobId }) + '</div>';
+    const statusEl = resultsEl.querySelector('[data-role="job-status"]');
+
+    // This view has no unmount hook -- app.js's router only toggles
+    // `panel.hidden` when switching tabs (the panel element itself, and
+    // whatever it last rendered, stays in the DOM) -- so `panel.hidden` is
+    // exactly how admin.js's own polling loop detects "the user left this
+    // tab" (see startPolling() there), and `document.body.contains(
+    // statusEl)` catches the other stale case: the user re-ran a query in
+    // this same view, which replaced panel's children (a fresh mount()/
+    // runAsJob() call) out from under this stream. The job itself keeps
+    // running server-side regardless of whether anything is still
+    // listening; it's also tracked in the Admin tab either way.
+    const stream = window.OcgdbApi.adminJobStream(jobId, 0, (evt) => {
+      if (evt.type !== 'status') return;
+      if (panel.hidden || !document.body.contains(statusEl)) { stream.stop(); return; }
+      if (!evt.final) {
+        statusEl.textContent = t().t('pql.jobRunning', { id: jobId }) +
+          (evt.gameCnt ? ' (' + Number(evt.gameCnt).toLocaleString() + ')' : '');
+        return;
+      }
+      if (evt.state === 'succeeded') {
+        renderJobResults(resultsEl, jobId, 0);
+      } else {
+        resultsEl.innerHTML = '<div class="panel-error">' +
+          t().t('pql.jobFailed', { state: evt.state }) + (evt.error ? ': ' + esc(evt.error) : '') + '</div>';
+      }
+    });
+  }
+
+  async function renderJobResults(el, jobId, offset) {
+    const limit = 200;
+    let data;
+    try {
+      data = await window.OcgdbApi.adminJobResults(jobId, offset, limit);
+    } catch (err) {
+      el.innerHTML = '<div class="panel-error">' + esc(err.message) + '</div>';
+      return;
+    }
+    let html = '<div class="pql-summary"><span><strong>' + data.total + '</strong> ' + t().t('pql.matched') + '</span></div>';
+    if (!data.gameIds.length) {
+      html += '<div class="panel-empty">' + t().t('pql.noResults') + '</div>';
+    } else {
+      html += '<div class="pql-job-ids">' +
+        data.gameIds.map((id) => '<a href="#" class="pql-job-id-link" data-id="' + id + '">#' + id + '</a>').join(' ') +
+        '</div>';
+      if (offset + data.gameIds.length < data.total) {
+        html += '<button type="button" class="btn btn-small" data-act="more">' + t().t('common.loadMore') + '</button>';
+      }
+    }
+    el.innerHTML = html;
+    el.querySelectorAll('.pql-job-id-link').forEach((a) => {
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        window.OcgdbNav.openGameViewer(Number(a.dataset.id));
+      });
+    });
+    const moreBtn = el.querySelector('[data-act="more"]');
+    if (moreBtn) moreBtn.addEventListener('click', () => renderJobResults(el, jobId, offset + limit));
   }
 
   async function runQuery(panel, q, limit) {

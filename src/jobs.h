@@ -85,6 +85,7 @@ public:
 private:
     struct QueuedJob {
         int id = -1;
+        std::string task;
         std::vector<std::string> argv;
         std::string writeTargetPath;
     };
