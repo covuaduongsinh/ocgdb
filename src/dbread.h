@@ -36,11 +36,19 @@ public:
     static bool hasTable(SQLite::Database* db, const std::string& name);
 
     static void extractHeader(SQLite::Statement& query, bslib::PgnRecord& record);
+    // queryVariations: optional (nullptr = skip -- most callers never
+    // need round-trip variation/NAG fidelity, only PGN export does), a
+    // prepared "SELECT Ply, Variation FROM GameTree WHERE GameID = ?"
+    // reused across calls the same way queryComments already is. Reads
+    // Comments.Nag too, but only if that column exists on this database
+    // (see the no-throw column-name check in the .cpp -- older/non-
+    // keepvariations databases don't have it).
     static void queryForABoard( bslib::PgnRecord& record,
                                 SearchField searchField,
                                 SQLite::Statement* query,
                                 SQLite::Statement* queryComments,
-                                bslib::BoardCore* board);
+                                bslib::BoardCore* board,
+                                SQLite::Statement* queryVariations = nullptr);
     
     virtual bool readADb(const std::string& dbPath, const std::string& sqlString);
 

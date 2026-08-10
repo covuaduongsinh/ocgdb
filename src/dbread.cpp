@@ -187,7 +187,8 @@ void DbRead::queryForABoard(bslib::PgnRecord& record,
                             SearchField searchField,
                             SQLite::Statement* query,
                             SQLite::Statement* queryComments,
-                            bslib::BoardCore* board)
+                            bslib::BoardCore* board,
+                            SQLite::Statement* queryVariations)
 {
     assert(query && board);
 
@@ -221,15 +222,40 @@ void DbRead::queryForABoard(bslib::PgnRecord& record,
             if (queryComments) {
                 queryComments->reset();
                 queryComments->bind(1, record.gameID);
+
+                // Comments.Nag only exists on a database created with
+                // -o keepvariations (see Builder::createDb(), builder.cpp)
+                // -- check by column *name*, not by catching the exception
+                // getColumn("Nag") would throw on an older database
+                // without it, since that would fire on every row of every
+                // comment-bearing game on every other database.
+                auto hasNagColumn = false;
+                for (int i = 0; i < queryComments->getColumnCount(); i++) {
+                    if (std::string(queryComments->getColumnName(i)) == "Nag") { hasNagColumn = true; break; }
+                }
+
                 while (queryComments->executeStep()) {
                     auto comment = queryComments->getColumn("Comment").getString();
-                    if (comment.empty()) continue;
-
                     auto ply = queryComments->getColumn("Ply").getInt();
+                    auto nag = hasNagColumn ? queryComments->getColumn("Nag").getInt() : 0;
+
                     if (ply >= 0 && ply < board->getHistListSize()) {
-                        board->_getHistPointerAt(ply)->comment = comment;
-                    } else {
+                        if (!comment.empty()) board->_getHistPointerAt(ply)->comment = comment;
+                        if (nag != 0) board->_getHistPointerAt(ply)->nag = nag;
+                    } else if (!comment.empty()) {
                         board->setFirstComment(comment);
+                    }
+                }
+            }
+
+            if (queryVariations) {
+                queryVariations->reset();
+                queryVariations->bind(1, record.gameID);
+                while (queryVariations->executeStep()) {
+                    auto ply = queryVariations->getColumn("Ply").getInt();
+                    auto variation = queryVariations->getColumn("Variation").getString();
+                    if (ply >= 0 && ply < board->getHistListSize() && !variation.empty()) {
+                        board->_getHistPointerAt(ply)->variationText = variation;
                     }
                 }
             }

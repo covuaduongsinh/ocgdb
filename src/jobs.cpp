@@ -54,8 +54,9 @@ bool isTruthy(const std::string& s)
 const std::set<std::string> kCreateOpts = {
     "moves", "moves1", "moves2", "acceptnewtags", "discardcomments",
     "discardsites", "discardnoelo", "discardfen", "reseteco", "nobot", "bot", "index", "parseeval",
+    "keepvariations",
 };
-const std::set<std::string> kMergeOpts = { "parseeval" };
+const std::set<std::string> kMergeOpts = { "parseeval", "keepvariations" };
 const std::set<std::string> kDupOpts = { "remove", "printall", "embededgames" };
 const std::set<std::string> kQueryOpts = { "printpgn", "printall", "printfen" };
 const std::set<std::string> kOptimizeOpts = { "vacuum", "integrity" };

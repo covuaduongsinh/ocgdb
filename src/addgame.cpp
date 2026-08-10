@@ -303,6 +303,26 @@ void AddGame::addAGame(const bslib::PgnRecord& record, const std::vector<int8_t>
                 flag |= bslib::BoardCore::ParseMoveListFlag_parseComment;
             }
         }
+        // Independent of the branch above, same as Builder::processPGNGameWithAThread()
+        // (builder.cpp) -- and same lazy, no-schema-migration rule as
+        // evalsTableExists just above: -o keepvariations only takes
+        // effect merging into a database that already has GameTree and
+        // Comments.Nag (i.e. one -create already built with the option).
+        if ((paraRecord.optionFlag & create_flag_keep_variations) && mDb) {
+            if (!variationsTableChecked) {
+                variationsTableChecked = true;
+                gameTreeExists = DbRead::hasTable(mDb, "GameTree");
+                if (gameTreeExists) {
+                    SQLite::Statement info(*mDb, "PRAGMA table_info(Comments)");
+                    while (info.executeStep()) {
+                        if (info.getColumn("name").getString() == "Nag") { commentsNagExists = true; break; }
+                    }
+                }
+            }
+            if (gameTreeExists && commentsNagExists) {
+                flag |= bslib::BoardCore::ParseMoveListFlag_keepVariations;
+            }
+        }
 
 //        bslib::PgnRecord record;
 //        record.moveText = moveText;
@@ -338,14 +358,41 @@ void AddGame::addAGame(const bslib::PgnRecord& record, const std::vector<int8_t>
                     }
                 }
                 
-                if (!h->comment.empty()) {
-                    t->insertCommentStatement->reset();
-                    t->insertCommentStatement->bind(1, gameID);
-                    t->insertCommentStatement->bind(2, i);
-                    t->insertCommentStatement->bind(3, h->comment);
-                    t->insertCommentStatement->exec();
+                bool keepVariations = gameTreeExists && commentsNagExists && (paraRecord.optionFlag & create_flag_keep_variations);
+                bool hasNag = keepVariations && h->nag != 0;
+                if (!h->comment.empty() || hasNag) {
+                    if (keepVariations) {
+                        if (!t->insertCommentNagStatement) {
+                            t->insertCommentNagStatement = new SQLite::Statement(*mDb,
+                                "INSERT INTO Comments (GameID, Ply, Comment, Nag) VALUES (?, ?, ?, ?)");
+                        }
+                        t->insertCommentNagStatement->reset();
+                        t->insertCommentNagStatement->bind(1, gameID);
+                        t->insertCommentNagStatement->bind(2, i);
+                        t->insertCommentNagStatement->bind(3, h->comment);
+                        t->insertCommentNagStatement->bind(4, h->nag);
+                        t->insertCommentNagStatement->exec();
+                    } else {
+                        t->insertCommentStatement->reset();
+                        t->insertCommentStatement->bind(1, gameID);
+                        t->insertCommentStatement->bind(2, i);
+                        t->insertCommentStatement->bind(3, h->comment);
+                        t->insertCommentStatement->exec();
+                    }
                     std::lock_guard<std::mutex> dolock(commentMutex);
                     commentCnt++;
+                }
+
+                if (keepVariations && !h->variationText.empty()) {
+                    if (!t->insertVariationStatement) {
+                        t->insertVariationStatement = new SQLite::Statement(*mDb,
+                            "INSERT INTO GameTree (GameID, Ply, Variation) VALUES (?, ?, ?)");
+                    }
+                    t->insertVariationStatement->reset();
+                    t->insertVariationStatement->bind(1, gameID);
+                    t->insertVariationStatement->bind(2, i);
+                    t->insertVariationStatement->bind(3, h->variationText);
+                    t->insertVariationStatement->exec();
                 }
 
                 if (evalsTableExists && !h->esVec.empty() && !h->esVec.front().empty()) {

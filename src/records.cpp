@@ -218,6 +218,7 @@ static const std::map<std::string, int> optionNameMap = {
     {"reseteco", 8},
     {"index", 9}, // for -create: build the standard secondary indexes right after creating
     {"parseeval", 13}, // for -create/-merge: extract engine-analysis comments into Evals
+    {"keepvariations", 14}, // for -create/-merge: keep RAV variations + NAG/!?-symbols
 
     // query
     {"printall", 10},
@@ -368,16 +369,22 @@ void ThreadRecord::deleteAllStatements()
     if (insertGameStatement) delete insertGameStatement;
     if (insertCommentStatement) delete insertCommentStatement;
     if (insertEvalStatement) delete insertEvalStatement;
+    if (insertVariationStatement) delete insertVariationStatement;
+    if (insertCommentNagStatement) delete insertCommentNagStatement;
     if (removeGameStatement) delete removeGameStatement;
     if (getGameStatement) delete getGameStatement;
     if (queryComments) delete queryComments;
+    if (queryVariations) delete queryVariations;
     if (qgr) delete qgr;
     insertGameStatement = nullptr;
     insertCommentStatement = nullptr;
     insertEvalStatement = nullptr;
+    insertVariationStatement = nullptr;
+    insertCommentNagStatement = nullptr;
     removeGameStatement = nullptr;
     getGameStatement = nullptr;
     queryComments = nullptr;
+    queryVariations = nullptr;
     qgr = nullptr;
 }
 
@@ -429,7 +436,10 @@ QueryGameRecord::QueryGameRecord(SQLite::Database& db, SearchField searchField)
     std::string str = DbRead::fullGameQueryString + " WHERE g.ID = ?";
     queryGameByID = new SQLite::Statement(db, str);
     queryComments = new SQLite::Statement(db, "SELECT * FROM Comments WHERE GameID = ?");
-    
+    if (DbRead::hasTable(&db, "GameTree")) {
+        queryVariations = new SQLite::Statement(db, "SELECT Ply, Variation FROM GameTree WHERE GameID = ?");
+    }
+
     board = bslib::Funcs::createBoard(bslib::ChessVariant::standard);
 }
 
@@ -446,7 +456,7 @@ std::string QueryGameRecord::queryAndCreatePGNByGameID(bslib::PgnRecord& record)
     std::string str;
     
     if (queryGameByID->executeStep()) {
-        DbRead::queryForABoard(record, searchField, queryGameByID, queryComments, board);
+        DbRead::queryForABoard(record, searchField, queryGameByID, queryComments, board, queryVariations);
         str = board->toPgn(&record);
     }
     return str;

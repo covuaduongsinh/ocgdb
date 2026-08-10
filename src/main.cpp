@@ -334,6 +334,7 @@ void print_usage()
     "    bot                Lichess: count games with BOT (for creating a database)\n" \
     "    index              also build secondary SQL indexes right after creating (for creating)\n" \
     "    parseeval          extract engine-analysis comments into the Evals table (for creating/merging)\n" \
+    "    keepvariations     keep RAV variations and NAG/!?-symbols in GameTree/Comments.Nag (for creating/merging)\n" \
     "    vacuum             also run VACUUM (for -optimize; rewrites the whole file)\n" \
     "    integrity          also run PRAGMA integrity_check (for -optimize)\n" \
     "\n" \

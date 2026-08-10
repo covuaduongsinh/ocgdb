@@ -355,13 +355,32 @@ SQLite::Database* Builder::createDb(const std::string& path, int optionFlag, con
         }
 
         mDb->exec("DROP TABLE IF EXISTS Comments");
-        mDb->exec("CREATE TABLE Comments (ID INTEGER PRIMARY KEY AUTOINCREMENT, GameID INTEGER, Ply INTEGER, Comment TEXT)");
+        // Nag is only added (not part of the base schema) when
+        // create_flag_keep_variations is set -- see the INSERT gating in
+        // processPGNGameWithAThread()/AddGame::addAGame() below, and
+        // DbRead::hasTable()-style presence checks wherever it's read
+        // back (queryForABoard(), dbread.cpp).
+        mDb->exec("CREATE TABLE Comments (ID INTEGER PRIMARY KEY AUTOINCREMENT, GameID INTEGER, Ply INTEGER, Comment TEXT"
+                   + std::string(optionFlag & create_flag_keep_variations ? ", Nag INTEGER" : "") + ")");
 
         if (optionFlag & create_flag_parse_eval) {
             mDb->exec("DROP TABLE IF EXISTS Evals");
             mDb->exec(
                 "CREATE TABLE Evals (GameID INTEGER, Ply INTEGER, Depth INTEGER, Score INTEGER,"
                 "Mate INTEGER, Nodes INTEGER, TimeMs INTEGER, PRIMARY KEY (GameID, Ply)) WITHOUT ROWID");
+        }
+
+        if (optionFlag & create_flag_keep_variations) {
+            // One row per ply that has at least one RAV variation attached,
+            // Variation already containing the fully reconstructed
+            // "(...) (...)" text (see Hist::variationText, chesstypes.h,
+            // and its assembly in BoardCore::fromMoveList(), base.cpp) --
+            // ready to splice directly back into exported PGN move text
+            // with no further parsing needed.
+            mDb->exec("DROP TABLE IF EXISTS GameTree");
+            mDb->exec(
+                "CREATE TABLE GameTree (GameID INTEGER, Ply INTEGER, Variation TEXT,"
+                "PRIMARY KEY (GameID, Ply)) WITHOUT ROWID");
         }
 
         // Pure static reference data (the ECO code -> opening name table
@@ -709,6 +728,11 @@ void Builder::processPGNGameWithAThread(ThreadRecord* t, const std::unordered_ma
             } else if (paraRecord.optionFlag & create_flag_parse_eval) {
                 flag |= bslib::BoardCore::ParseMoveListFlag_parseComment;
             }
+            // Independent of the comment-handling choice above -- a game
+            // can have engine-eval comments AND variations/NAGs at once.
+            if (paraRecord.optionFlag & create_flag_keep_variations) {
+                flag |= bslib::BoardCore::ParseMoveListFlag_keepVariations;
+            }
 
             bslib::PgnRecord record;
             record.moveText = moveText;
@@ -744,14 +768,47 @@ void Builder::processPGNGameWithAThread(ThreadRecord* t, const std::unordered_ma
                         }
                     }
                     
-                    if (!h->comment.empty()) {
-                        t->insertCommentStatement->reset();
-                        t->insertCommentStatement->bind(1, gameID);
-                        t->insertCommentStatement->bind(2, i);
-                        t->insertCommentStatement->bind(3, h->comment);
-                        t->insertCommentStatement->exec();
+                    bool keepVariations = (paraRecord.optionFlag & create_flag_keep_variations) != 0;
+                    bool hasNag = keepVariations && h->nag != 0;
+                    if (!h->comment.empty() || hasNag) {
+                        if (keepVariations) {
+                            // Same row as the plain 3-column path below,
+                            // just with Nag along for the ride (0 = none,
+                            // matching how a comment-less/nag-less ply
+                            // simply gets no row at all either way -- see
+                            // nagSymbolToCode(), base.cpp, which never
+                            // produces 0 for a real symbol).
+                            if (!t->insertCommentNagStatement) {
+                                t->insertCommentNagStatement = new SQLite::Statement(*mDb,
+                                    "INSERT INTO Comments (GameID, Ply, Comment, Nag) VALUES (?, ?, ?, ?)");
+                            }
+                            t->insertCommentNagStatement->reset();
+                            t->insertCommentNagStatement->bind(1, gameID);
+                            t->insertCommentNagStatement->bind(2, i);
+                            t->insertCommentNagStatement->bind(3, h->comment);
+                            t->insertCommentNagStatement->bind(4, h->nag);
+                            t->insertCommentNagStatement->exec();
+                        } else {
+                            t->insertCommentStatement->reset();
+                            t->insertCommentStatement->bind(1, gameID);
+                            t->insertCommentStatement->bind(2, i);
+                            t->insertCommentStatement->bind(3, h->comment);
+                            t->insertCommentStatement->exec();
+                        }
                         std::lock_guard<std::mutex> dolock(commentMutex);
                         commentCnt++;
+                    }
+
+                    if (keepVariations && !h->variationText.empty()) {
+                        if (!t->insertVariationStatement) {
+                            t->insertVariationStatement = new SQLite::Statement(*mDb,
+                                "INSERT INTO GameTree (GameID, Ply, Variation) VALUES (?, ?, ?)");
+                        }
+                        t->insertVariationStatement->reset();
+                        t->insertVariationStatement->bind(1, gameID);
+                        t->insertVariationStatement->bind(2, i);
+                        t->insertVariationStatement->bind(3, h->variationText);
+                        t->insertVariationStatement->exec();
                     }
 
                     if ((paraRecord.optionFlag & create_flag_parse_eval) && !h->esVec.empty() && !h->esVec.front().empty()) {
