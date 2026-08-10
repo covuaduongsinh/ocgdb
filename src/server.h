@@ -62,6 +62,19 @@ private:
     std::string apiGamePgnText(int id, bool& found) const;
     std::string apiNameLookupJson(const char* table, const std::string& q, int limit) const;
     std::string apiStatsJson(bool refresh);
+    // GET /api/player/:id -- W/D/L split by color, Elo-over-time (from
+    // Games.WhiteElo/BlackElo, NOT Players.Elo -- see the comment above
+    // its query in server.cpp for why), top opponents, top openings per
+    // color, first/last game. Depends on the idx_games_white/idx_games_black
+    // indexes (Phase 1.1, -index task) for reasonable performance on large
+    // databases; still correct without them, just a full scan.
+    std::string apiPlayerJson(int id, bool& found) const;
+    // GET /api/h2h?a=&b= -- aggregate W/D/L between two specific players
+    // plus their most recent games against each other.
+    std::string apiH2hJson(int a, int b) const;
+    // GET /api/event/:id -- every player who appears in this event, with
+    // games/wins/draws/losses and score, sorted by score descending.
+    std::string apiEventJson(int id, bool& found) const;
     std::string apiQueryJson(const std::string& pql, int limit);
     // GET /api/tree?fen=... -- next-move stats (games, W/D/L, avg Elo, most
     // recent year) for the position `fen` names, from the OpeningTree table
