@@ -201,6 +201,12 @@
       return { stop: () => controller.abort() };
     },
 
+    adminSetGameComment(gameId, ply, comment) {
+      return adminFetch('POST', '/api/admin/game/' + encodeURIComponent(gameId) + '/comment', { ply, comment });
+    },
+    adminDeleteGame(gameId) {
+      return adminFetch('POST', '/api/admin/game/' + encodeURIComponent(gameId) + '/delete');
+    },
     adminEngines() { return adminFetch('GET', '/api/admin/engines'); },
     adminAddEngine(name, path, options) { return adminFetch('POST', '/api/admin/engines/add', { name, path, options }); },
     adminRemoveEngine(id) { return adminFetch('POST', '/api/admin/engines/remove', { id }); },

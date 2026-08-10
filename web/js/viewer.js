@@ -84,6 +84,8 @@
               (tag('Date') ? ' &middot; ' + esc(tag('Date')) : '') +
               (tag('ECO') ? ' &middot; ' + esc(tag('ECO')) : '') +
             '</div>' +
+            (window.OcgdbApi.hasAdminToken() ?
+              '<button type="button" class="btn btn-small viewer-delete-btn" data-act="delete-game">' + t().t('viewer.deleteGame') + '</button>' : '') +
           '</div>' +
           '<div class="viewer-body">' +
             '<div class="viewer-board-col">' +
@@ -96,7 +98,18 @@
                 '<button type="button" class="btn" data-act="flip" title="' + t().t('viewer.flip') + '">&#8645;</button>' +
                 '<span class="viewer-plycount muted"></span>' +
               '</div>' +
-              '<div class="viewer-comment muted"></div>' +
+              '<div class="viewer-comment-row">' +
+                '<div class="viewer-comment muted"></div>' +
+                (window.OcgdbApi.hasAdminToken() ?
+                  '<button type="button" class="btn btn-small" data-act="edit-comment">' + t().t('viewer.editComment') + '</button>' : '') +
+              '</div>' +
+              '<div class="viewer-comment-edit" data-role="comment-edit" hidden>' +
+                '<textarea rows="2"></textarea>' +
+                '<div class="viewer-comment-edit-actions">' +
+                  '<button type="button" class="btn btn-small btn-primary" data-act="save-comment">' + t().t('common.save') + '</button>' +
+                  '<button type="button" class="btn btn-small" data-act="cancel-comment">' + t().t('common.cancel') + '</button>' +
+                '</div>' +
+              '</div>' +
             '</div>' +
             '<div class="viewer-side-col">' +
               '<div class="viewer-moves"></div>' +
@@ -175,6 +188,56 @@
           btn.textContent = t().t('common.copied');
           setTimeout(() => { btn.textContent = old; }, 1200);
         });
+      } else if (act === 'delete-game') {
+        this._deleteGame();
+      } else if (act === 'edit-comment') {
+        this._openCommentEditor();
+      } else if (act === 'save-comment') {
+        this._saveComment();
+      } else if (act === 'cancel-comment') {
+        this.root.querySelector('[data-role="comment-edit"]').hidden = true;
+      }
+    }
+
+    async _deleteGame() {
+      if (!confirm(t().t('viewer.confirmDelete'))) return;
+      const btn = this.root.querySelector('[data-act="delete-game"]');
+      if (btn) btn.disabled = true;
+      try {
+        await window.OcgdbApi.adminDeleteGame(this.game.id);
+        window.OcgdbNav.closeModal();
+        if (window.OcgdbApp && window.OcgdbApp.reload) window.OcgdbApp.reload();
+      } catch (err) {
+        alert(err.message);
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    _openCommentEditor() {
+      const editEl = this.root.querySelector('[data-role="comment-edit"]');
+      if (!editEl) return;
+      const current = this.cur === 0
+        ? (this.game.firstComment || '')
+        : ((this.game.moves[this.cur - 1] || {}).comment || '');
+      editEl.querySelector('textarea').value = current;
+      editEl.hidden = false;
+    }
+
+    async _saveComment() {
+      const editEl = this.root.querySelector('[data-role="comment-edit"]');
+      const comment = editEl.querySelector('textarea').value;
+      // Matches the server's convention (server.cpp/dbread.cpp): ply -1
+      // is the game's leading ("first") comment, before move 1; every
+      // other ply is 0-indexed same as g.moves[].
+      const ply = this.cur === 0 ? -1 : this.cur - 1;
+      try {
+        await window.OcgdbApi.adminSetGameComment(this.game.id, ply, comment);
+        if (this.cur === 0) this.game.firstComment = comment;
+        else if (this.game.moves[this.cur - 1]) this.game.moves[this.cur - 1].comment = comment;
+        editEl.hidden = true;
+        this._update();
+      } catch (err) {
+        alert(err.message);
       }
     }
 
