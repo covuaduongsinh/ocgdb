@@ -220,6 +220,9 @@ bool Node::isValid() const
             return !fenHashSet.empty();
 
         case NodeType::op:
+            if (op == Operator::op_not) {
+                return lhs && !rhs && lhs->isValid();
+            }
             return lhs && rhs && lhs->isValid() && rhs->isValid() && op < Operator::none;
             
         case NodeType::piece:
@@ -255,6 +258,14 @@ int Node::evaluate(const std::vector<uint64_t>& bitboardVec) const
         }
         case NodeType::op:
         {
+            if (op == Operator::op_not) {
+                // Unary -- unlike every other operator here, rhs is
+                // deliberately null (see parse_condition()) and must
+                // never be dereferenced.
+                assert(lhs && !rhs);
+                return lhs->evaluate(bitboardVec) ? 0 : 1;
+            }
+
             assert(lhs && rhs);
             auto l = lhs->evaluate(bitboardVec), r = rhs->evaluate(bitboardVec);
             switch (op) {
@@ -1274,12 +1285,32 @@ Node* Parser::parse_pattern(size_t& from)
 Node* Parser::parse_condition(size_t& from)
 {
     assert(from <= lexVec.size());
-    
+
+    // Unary prefix, binding to one whole condition (so "not Q=3 and R=2"
+    // means "(not (Q=3)) and (R=2)", not "not (Q=(3 and R=2))" or
+    // "not ((Q=3) and R)=2" -- parse_condition() is exactly the grain the
+    // outer and/or chain in parse() already operates on, so hooking here
+    // gives "not" the same scope as one and/or operand, consistently).
+    // Right-recursive, so "not not X" parses fine (double negation).
+    if (from < lexVec.size() && lexVec.at(from).lex == Lex::operator_not) {
+        ++from;
+        auto operand = parse_condition(from);
+        if (!operand) {
+            if (error == ParseError::none) error = ParseError::missing_condition;
+            return nullptr;
+        }
+        auto node = new Node;
+        node->nodeType = NodeType::op;
+        node->op = Operator::op_not;
+        node->lhs = operand;
+        return node;
+    }
+
     auto node = parse_fenclause(from);
     if (node) {
         return node;
     }
-    
+
     if (error != ParseError::none) {
         return nullptr;
     }
@@ -1744,6 +1775,8 @@ std::vector<LexWord> Parser::lexParse(const char* s)
                         word.lex = Lex::operator_and;
                     } else if (text == "or") {
                         word.lex = Lex::operator_or;
+                    } else if (text == "not") {
+                        word.lex = Lex::operator_not;
                     }
                     words.push_back(word);
                     break;
