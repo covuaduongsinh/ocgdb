@@ -50,6 +50,12 @@ enum class Lex
     // so the grammar can tell "player name value" apart from "the
     // whiteplayer identifier itself" at the token level.
     stringlit,
+    // Unary prefix "not" -- deliberately kept outside the operator_begin..
+    // operator_pattern_shift range below: those are exactly the tokens
+    // Node::Node(const LexWord&) turns directly into a binary op node via
+    // string2operator(), which "not" never goes through (parse_condition()
+    // builds its (unary) Node by hand instead -- see parser.cpp).
+    operator_not,
 
     operator_begin,
     operator_and = operator_begin, operator_or,
@@ -90,6 +96,7 @@ enum class Operator
 {
     op_and, op_or, op_add, op_sub, op_multi, op_div,
     op_eq, op_l, op_le, op_g, op_ge, op_ne,
+    op_not, // unary -- see NodeType::op handling in Node::evaluate()/isValid()
     none
 };
 
