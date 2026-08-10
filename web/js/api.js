@@ -130,6 +130,75 @@
     adminSubmitJob(params) { return adminFetch('POST', '/api/admin/jobs/submit', params); },
     adminCancelJob(id) { return adminFetch('POST', '/api/admin/jobs/' + encodeURIComponent(id) + '/cancel'); },
     adminClearJobs() { return adminFetch('POST', '/api/admin/jobs/clear'); },
+
+    // Uploads `file` to POST /api/admin/upload (multipart/form-data) and
+    // resolves to the server-side path the job form should submit as
+    // "pgn". Uses XMLHttpRequest rather than fetch() specifically for
+    // xhr.upload.onprogress -- fetch() has no equivalent for outgoing
+    // (request body) progress, only incoming.
+    adminUpload(file, onProgress) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/admin/upload');
+        xhr.setRequestHeader('X-OCGDB-Token', getAdminToken());
+        if (onProgress) {
+          xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded, e.total); };
+        }
+        xhr.onload = () => {
+          let body = null;
+          try { body = JSON.parse(xhr.responseText); } catch (e) { /* fall through to status check */ }
+          if (xhr.status === 401) document.dispatchEvent(new CustomEvent('ocgdb:admin-unauthorized'));
+          if (xhr.status >= 200 && xhr.status < 300 && body) resolve(body);
+          else reject(new ApiError((body && body.error) || ('HTTP ' + xhr.status), xhr.status));
+        };
+        xhr.onerror = () => reject(new ApiError('network error', 0));
+        const fd = new FormData();
+        fd.append('file', file, file.name);
+        xhr.send(fd);
+      });
+    },
+
+    // Reads GET /api/admin/jobs/:id/stream (newline-delimited JSON chunks;
+    // see server.cpp) via fetch() + ReadableStream -- deliberately not
+    // EventSource, which cannot set the X-OCGDB-Token header this server's
+    // auth depends on. Calls onEvent(obj) for each parsed line as it
+    // arrives. Returns an AbortController-like handle whose stop() ends the
+    // read loop (call it when the UI showing this stream goes away).
+    adminJobStream(id, fromSeq, onEvent) {
+      const controller = new AbortController();
+      (async () => {
+        let res;
+        try {
+          res = await fetch('/api/admin/jobs/' + encodeURIComponent(id) + '/stream?from=' + (fromSeq || 0), {
+            headers: { 'X-OCGDB-Token': getAdminToken() },
+            signal: controller.signal,
+          });
+        } catch (e) {
+          return; // aborted, or the connection never came up -- caller has no fallback here
+        }
+        if (res.status === 401) document.dispatchEvent(new CustomEvent('ocgdb:admin-unauthorized'));
+        if (!res.ok || !res.body) return;
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            let nl;
+            while ((nl = buf.indexOf('\n')) >= 0) {
+              const line = buf.slice(0, nl);
+              buf = buf.slice(nl + 1);
+              if (!line) continue;
+              try { onEvent(JSON.parse(line)); } catch (e) { /* skip a malformed line */ }
+            }
+          }
+        } catch (e) { /* aborted mid-read, or connection dropped -- nothing more to do */ }
+      })();
+      return { stop: () => controller.abort() };
+    },
   };
 
   window.OcgdbApi = API;

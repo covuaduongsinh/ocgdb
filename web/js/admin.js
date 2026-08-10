@@ -358,6 +358,30 @@
     form.addEventListener('change', updatePreview);
     updatePreview();
 
+    const uploadInput = form.querySelector('[data-role="pgn-upload"]');
+    if (uploadInput) {
+      const statusEl = form.querySelector('[data-role="pgn-upload-status"]');
+      const pgnField = form.querySelector('[name="pgn"]');
+      uploadInput.addEventListener('change', async () => {
+        const files = Array.from(uploadInput.files || []);
+        uploadInput.value = ''; // allow re-selecting the same file later
+        for (const file of files) {
+          statusEl.textContent = t().t('admin.uploading', { name: file.name, pct: 0 });
+          try {
+            const res = await window.OcgdbApi.adminUpload(file, (loaded, total) => {
+              statusEl.textContent = t().t('admin.uploading', { name: file.name, pct: Math.round((loaded / total) * 100) });
+            });
+            const cur = pgnField.value.replace(/\s+$/, '');
+            pgnField.value = cur ? cur + '\n' + res.path : res.path;
+            pgnField.dispatchEvent(new Event('input', { bubbles: true }));
+            statusEl.textContent = t().t('admin.uploadDone', { name: file.name });
+          } catch (err) {
+            statusEl.textContent = localizeError(err.message);
+          }
+        }
+      });
+    }
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       errEl.hidden = true;
@@ -401,9 +425,23 @@
         '<textarea name="' + name + '" rows="3"' + (required ? ' required' : '') + '></textarea></label>';
     const check = (name, key) =>
       '<label class="field field-checkbox"><input type="checkbox" name="' + name + '"> ' + t().t('admin.f.' + key) + '</label>';
+    // File input styled as a button (label wraps a hidden <input type=file>).
+    // Uploaded files land server-side under <root>/uploads (see
+    // POST /api/admin/upload, server.cpp) and their returned path is
+    // appended to the adjacent "pgn" textarea -- job submission always
+    // takes a server path either way, this just gets one there without the
+    // user needing filesystem/shell access to the machine running -server.
+    const pgnUpload = () =>
+      '<div class="field field-wide admin-upload">' +
+        '<label class="btn btn-small admin-upload-btn">' + t().t('admin.uploadPgn') +
+          '<input type="file" data-role="pgn-upload" accept=".pgn,.txt" multiple hidden>' +
+        '</label>' +
+        '<span class="small muted" data-role="pgn-upload-status"></span>' +
+      '</div>';
 
     if (task === 'create') {
       parts.push(area('pgn', 'pgn', true));
+      parts.push(pgnUpload());
       parts.push(text('db', 'dbOut', true));
       parts.push('<div class="field field-wide"><span>' + t().t('admin.f.opts') + '</span><div class="checkgroup">' +
         CREATE_OPTS.map((o) => '<label class="chip-check"><input type="checkbox" name="opt_' + o + '" value="' + o + '"> ' + o + '</label>').join('') +
@@ -417,6 +455,7 @@
       parts.push(text('dbDest', 'dbDest', true));
       parts.push(area('dbSources', 'dbSources', false));
       parts.push(area('pgn', 'pgn', false));
+      parts.push(pgnUpload());
     } else if (task === 'export') {
       parts.push(area('db', 'dbIn', true));
       parts.push(text('pgnOut', 'pgnOut', true));
@@ -657,24 +696,15 @@
     container.innerHTML = '<div class="panel-loading">' + t().t('common.loading') + '</div>';
     window.OcgdbNav.openModal(container, { wide: true });
 
-    let logTimer = null;
-    let nextSeq = 0;
+    let stream = null;
 
-    async function refreshDetail() {
-      let job;
-      try {
-        const data = await window.OcgdbApi.adminJob(id);
-        job = data.job;
-      } catch (err) {
-        container.innerHTML = '<div class="panel-error">' + esc(localizeError(err.message)) + '</div>';
-        return;
-      }
+    function renderShell(job) {
       container.innerHTML =
-        '<h2>' + t().t('admin.job') + ' #' + job.id + ' &mdash; ' + esc(job.task) + ' ' + stateChip(job.state) + '</h2>' +
+        '<h2>' + t().t('admin.job') + ' #' + job.id + ' &mdash; ' + esc(job.task) + ' <span data-role="chip">' + stateChip(job.state) + '</span></h2>' +
         '<div class="admin-job-cmdline"><code>' + esc(job.cmdline) + '</code></div>' +
-        (job.error ? '<div class="admin-warning">' + esc(job.error) + '</div>' : '') +
+        '<div class="admin-warning" data-role="warning" hidden></div>' +
         '<div class="admin-job-log" data-role="log"></div>' +
-        '<div class="admin-job-detail-actions">' +
+        '<div class="admin-job-detail-actions" data-role="actions">' +
           (['queued', 'running'].includes(job.state)
             ? '<button type="button" class="btn" data-act="cancel">' + t().t('admin.cancel') + '</button>' : '') +
         '</div>';
@@ -683,40 +713,53 @@
       if (cancelBtn) {
         cancelBtn.addEventListener('click', async () => {
           cancelBtn.disabled = true;
-          try { await window.OcgdbApi.adminCancelJob(id); } catch (err) { /* reflected on next poll */ }
+          try { await window.OcgdbApi.adminCancelJob(id); } catch (err) { /* reflected on the next status event */ }
         });
-      }
-
-      await appendLog(true);
-      if (['queued', 'running'].includes(job.state)) {
-        logTimer = setTimeout(() => { refreshDetail(); appendLog(false); }, 1200);
       }
     }
 
-    async function appendLog(scrollToEnd) {
-      const logEl = container.querySelector('[data-role="log"]');
-      if (!logEl) return;
-      try {
-        const data = await window.OcgdbApi.adminJobLog(id, nextSeq);
-        (data.lines || []).forEach((l) => {
+    // The task/cmdline/id fields are immutable once a job exists, so one
+    // plain fetch is enough for those; state/progress/log come from the
+    // streamed connection below instead of being re-fetched alongside them.
+    window.OcgdbApi.adminJob(id).then(({ job }) => {
+      renderShell(job);
+
+      stream = window.OcgdbApi.adminJobStream(id, 0, (evt) => {
+        if (!document.body.contains(container)) return; // modal already closed
+        if (evt.type === 'log') {
+          const logEl = container.querySelector('[data-role="log"]');
+          if (!logEl) return;
+          const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 4;
           const line = document.createElement('div');
-          line.textContent = l.line;
+          line.textContent = evt.line;
           logEl.appendChild(line);
-        });
-        nextSeq = data.nextSeq || nextSeq;
-        if (scrollToEnd) logEl.scrollTop = logEl.scrollHeight;
-      } catch (err) { /* log polling is best-effort */ }
-    }
+          if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+        } else if (evt.type === 'status') {
+          const chipEl = container.querySelector('[data-role="chip"]');
+          if (chipEl) chipEl.innerHTML = stateChip(evt.state);
+          const warnEl = container.querySelector('[data-role="warning"]');
+          if (warnEl) {
+            if (evt.error) { warnEl.textContent = evt.error; warnEl.hidden = false; }
+            else warnEl.hidden = true;
+          }
+          if (evt.final) {
+            const actionsEl = container.querySelector('[data-role="actions"]');
+            if (actionsEl) actionsEl.innerHTML = '';
+            if (evt.state === 'succeeded' || evt.state === 'failed') refreshJobs(panel);
+          }
+        }
+      });
+    }).catch((err) => {
+      container.innerHTML = '<div class="panel-error">' + esc(localizeError(err.message)) + '</div>';
+    });
 
-    refreshDetail();
-
-    const origClose = () => { if (logTimer) clearTimeout(logTimer); };
+    const stopStream = () => { if (stream) stream.stop(); };
     // Piggyback on the existing modal close hook via app.js's onModalClose,
-    // which isn't exported -- instead, stop the timer whenever the modal
+    // which isn't exported -- instead, stop the stream whenever the modal
     // backdrop is removed from the DOM.
     const observer = new MutationObserver(() => {
       if (!document.body.contains(container)) {
-        origClose();
+        stopStream();
         observer.disconnect();
       }
     });
