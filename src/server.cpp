@@ -507,6 +507,40 @@ void WebServer::runTask()
         res.set_content(apiNameLookupJson("Sites", req.get_param_value("q"), limit), "application/json; charset=utf-8");
     });
 
+    server.Get("/api/player/:id", [this](const httplib::Request& req, httplib::Response& res) {
+        std::shared_lock<std::shared_mutex> lock;
+        if (!tryReadLock(lock)) { res.status = 503; res.set_content(busyJsonBody(jobManager->activeJob()), "application/json; charset=utf-8"); return; }
+        auto id = std::atoi(req.path_params.at("id").c_str());
+        bool found = false;
+        auto body = apiPlayerJson(id, found);
+        if (!found) res.status = 404;
+        res.set_content(body, "application/json; charset=utf-8");
+    });
+
+    server.Get("/api/h2h", [this](const httplib::Request& req, httplib::Response& res) {
+        std::shared_lock<std::shared_mutex> lock;
+        if (!tryReadLock(lock)) { res.status = 503; res.set_content(busyJsonBody(jobManager->activeJob()), "application/json; charset=utf-8"); return; }
+        auto a = std::atoi(req.get_param_value("a").c_str());
+        auto b = std::atoi(req.get_param_value("b").c_str());
+        if (a <= 0 || b <= 0 || a == b) {
+            res.status = 400;
+            Json j; j.objBegin().kv("error", "a and b must both be valid, distinct player ids").objEnd();
+            res.set_content(j.str(), "application/json; charset=utf-8");
+            return;
+        }
+        res.set_content(apiH2hJson(a, b), "application/json; charset=utf-8");
+    });
+
+    server.Get("/api/event/:id", [this](const httplib::Request& req, httplib::Response& res) {
+        std::shared_lock<std::shared_mutex> lock;
+        if (!tryReadLock(lock)) { res.status = 503; res.set_content(busyJsonBody(jobManager->activeJob()), "application/json; charset=utf-8"); return; }
+        auto id = std::atoi(req.path_params.at("id").c_str());
+        bool found = false;
+        auto body = apiEventJson(id, found);
+        if (!found) res.status = 404;
+        res.set_content(body, "application/json; charset=utf-8");
+    });
+
     server.Get("/api/stats", [this](const httplib::Request& req, httplib::Response& res) {
         std::shared_lock<std::shared_mutex> lock;
         if (!tryReadLock(lock)) { res.status = 503; res.set_content(busyJsonBody(jobManager->activeJob()), "application/json; charset=utf-8"); return; }
@@ -1382,6 +1416,316 @@ std::string WebServer::apiStatsJson(bool refresh)
     j.objEnd();
     active.statsCache = j.str();
     return active.statsCache;
+}
+
+////////////////////////////////////////////////////////////////////////////
+// /api/player/:id, /api/h2h, /api/event/:id (Phase 3.4)
+
+std::string WebServer::apiPlayerJson(int id, bool& found) const
+{
+    found = false;
+    Json j;
+    j.objBegin();
+    if (!active.db) { j.objEnd(); return j.str(); }
+
+    {
+        SQLite::Statement stmt(*active.db, "SELECT ID, Name, Elo FROM Players WHERE ID = ?");
+        stmt.bind(1, id);
+        if (!stmt.executeStep()) { j.objEnd(); return j.str(); }
+        found = true;
+        j.kv("id", stmt.getColumn("ID").getInt());
+        j.kv("name", stmt.getColumn("Name").getString());
+        // Players.Elo is a single scalar, set once from whichever game
+        // first created this row (see Builder::createDb() -> player
+        // insert, builder.cpp) -- NOT their current or peak rating. The
+        // real Elo-over-time series below is computed from
+        // Games.WhiteElo/BlackElo instead, which is per-game.
+        j.kv("lastKnownElo", stmt.getColumn("Elo"));
+    }
+
+    bool hasResult = hasGamesColumn("Result");
+
+    if (hasResult) {
+        SQLite::Statement stmt(*active.db,
+            "SELECT "
+            "  SUM(CASE WHEN WhiteID = :id THEN 1 ELSE 0 END) AS wTotal,"
+            "  SUM(CASE WHEN WhiteID = :id AND Result = '1-0' THEN 1 ELSE 0 END) AS wWins,"
+            "  SUM(CASE WHEN WhiteID = :id AND Result = '1/2-1/2' THEN 1 ELSE 0 END) AS wDraws,"
+            "  SUM(CASE WHEN WhiteID = :id AND Result = '0-1' THEN 1 ELSE 0 END) AS wLosses,"
+            "  SUM(CASE WHEN BlackID = :id THEN 1 ELSE 0 END) AS bTotal,"
+            "  SUM(CASE WHEN BlackID = :id AND Result = '0-1' THEN 1 ELSE 0 END) AS bWins,"
+            "  SUM(CASE WHEN BlackID = :id AND Result = '1/2-1/2' THEN 1 ELSE 0 END) AS bDraws,"
+            "  SUM(CASE WHEN BlackID = :id AND Result = '1-0' THEN 1 ELSE 0 END) AS bLosses "
+            "FROM Games WHERE WhiteID = :id OR BlackID = :id");
+        stmt.bind(":id", id);
+        if (stmt.executeStep()) {
+            j.key("asWhite"); j.objBegin();
+            j.kv("games", stmt.getColumn("wTotal").getInt64());
+            j.kv("wins", stmt.getColumn("wWins").getInt64());
+            j.kv("draws", stmt.getColumn("wDraws").getInt64());
+            j.kv("losses", stmt.getColumn("wLosses").getInt64());
+            j.objEnd();
+            j.key("asBlack"); j.objBegin();
+            j.kv("games", stmt.getColumn("bTotal").getInt64());
+            j.kv("wins", stmt.getColumn("bWins").getInt64());
+            j.kv("draws", stmt.getColumn("bDraws").getInt64());
+            j.kv("losses", stmt.getColumn("bLosses").getInt64());
+            j.objEnd();
+            j.kv("totalGames", stmt.getColumn("wTotal").getInt64() + stmt.getColumn("bTotal").getInt64());
+        }
+    } else {
+        SQLite::Statement stmt(*active.db,
+            "SELECT SUM(CASE WHEN WhiteID = :id THEN 1 ELSE 0 END) AS wTotal,"
+            "       SUM(CASE WHEN BlackID = :id THEN 1 ELSE 0 END) AS bTotal "
+            "FROM Games WHERE WhiteID = :id OR BlackID = :id");
+        stmt.bind(":id", id);
+        if (stmt.executeStep()) {
+            j.kv("totalGames", stmt.getColumn("wTotal").getInt64() + stmt.getColumn("bTotal").getInt64());
+        }
+    }
+
+    j.key("eloHistory");
+    j.arrBegin();
+    if (hasGamesColumn("Date") && hasGamesColumn("WhiteElo") && hasGamesColumn("BlackElo")) {
+        SQLite::Statement stmt(*active.db,
+            "SELECT Date, WhiteElo AS elo FROM Games "
+            "WHERE WhiteID = :id AND WhiteElo > 0 AND Date IS NOT NULL AND Date <> '' "
+            "UNION ALL "
+            "SELECT Date, BlackElo AS elo FROM Games "
+            "WHERE BlackID = :id AND BlackElo > 0 AND Date IS NOT NULL AND Date <> '' "
+            "ORDER BY Date LIMIT 5000");
+        stmt.bind(":id", id);
+        while (stmt.executeStep()) {
+            j.objBegin();
+            j.kv("date", stmt.getColumn("Date").getString());
+            j.kv("elo", stmt.getColumn("elo").getInt64());
+            j.objEnd();
+        }
+    }
+    j.arrEnd();
+
+    j.key("topOpponents");
+    j.arrBegin();
+    if (hasResult) {
+        SQLite::Statement stmt(*active.db,
+            "SELECT p.ID, p.Name, COUNT(*) AS games,"
+            "       SUM(CASE WHEN x.outcome = 'W' THEN 1 ELSE 0 END) AS wins,"
+            "       SUM(CASE WHEN x.outcome = 'D' THEN 1 ELSE 0 END) AS draws,"
+            "       SUM(CASE WHEN x.outcome = 'L' THEN 1 ELSE 0 END) AS losses "
+            "FROM ("
+            "  SELECT BlackID AS oppID,"
+            "         CASE Result WHEN '1-0' THEN 'W' WHEN '1/2-1/2' THEN 'D' WHEN '0-1' THEN 'L' END AS outcome"
+            "  FROM Games WHERE WhiteID = :id"
+            "  UNION ALL"
+            "  SELECT WhiteID AS oppID,"
+            "         CASE Result WHEN '0-1' THEN 'W' WHEN '1/2-1/2' THEN 'D' WHEN '1-0' THEN 'L' END AS outcome"
+            "  FROM Games WHERE BlackID = :id"
+            ") x JOIN Players p ON p.ID = x.oppID "
+            "GROUP BY p.ID, p.Name ORDER BY games DESC LIMIT 15");
+        stmt.bind(":id", id);
+        while (stmt.executeStep()) {
+            j.objBegin();
+            j.kv("id", stmt.getColumn("ID").getInt());
+            j.kv("name", stmt.getColumn("Name").getString());
+            j.kv("games", stmt.getColumn("games").getInt64());
+            j.kv("wins", stmt.getColumn("wins").getInt64());
+            j.kv("draws", stmt.getColumn("draws").getInt64());
+            j.kv("losses", stmt.getColumn("losses").getInt64());
+            j.objEnd();
+        }
+    }
+    j.arrEnd();
+
+    auto topEcoFor = [&](const char* key, const char* idCol) {
+        j.key(key);
+        j.arrBegin();
+        if (hasGamesColumn("ECO")) {
+            std::string sql = std::string("SELECT ECO, COUNT(*) c FROM Games WHERE ") + idCol +
+                " = :id AND ECO IS NOT NULL AND ECO <> '' GROUP BY ECO ORDER BY c DESC LIMIT 10";
+            SQLite::Statement stmt(*active.db, sql);
+            stmt.bind(":id", id);
+            while (stmt.executeStep()) {
+                j.objBegin();
+                j.kv("eco", stmt.getColumn(0).getString());
+                j.kv("count", stmt.getColumn(1).getInt64());
+                j.objEnd();
+            }
+        }
+        j.arrEnd();
+    };
+    topEcoFor("topOpeningsAsWhite", "WhiteID");
+    topEcoFor("topOpeningsAsBlack", "BlackID");
+
+    if (hasGamesColumn("Date")) {
+        SQLite::Statement first(*active.db,
+            "SELECT ID, Date FROM Games WHERE (WhiteID = :id OR BlackID = :id) "
+            "AND Date IS NOT NULL AND Date <> '' ORDER BY Date ASC, ID ASC LIMIT 1");
+        first.bind(":id", id);
+        if (first.executeStep()) {
+            j.key("firstGame"); j.objBegin();
+            j.kv("id", first.getColumn("ID").getInt());
+            j.kv("date", first.getColumn("Date").getString());
+            j.objEnd();
+        } else j.kvNull("firstGame");
+
+        SQLite::Statement last(*active.db,
+            "SELECT ID, Date FROM Games WHERE (WhiteID = :id OR BlackID = :id) "
+            "AND Date IS NOT NULL AND Date <> '' ORDER BY Date DESC, ID DESC LIMIT 1");
+        last.bind(":id", id);
+        if (last.executeStep()) {
+            j.key("lastGame"); j.objBegin();
+            j.kv("id", last.getColumn("ID").getInt());
+            j.kv("date", last.getColumn("Date").getString());
+            j.objEnd();
+        } else j.kvNull("lastGame");
+    } else {
+        j.kvNull("firstGame");
+        j.kvNull("lastGame");
+    }
+
+    j.objEnd();
+    return j.str();
+}
+
+std::string WebServer::apiH2hJson(int a, int b) const
+{
+    Json j;
+    j.objBegin();
+    j.kv("a", a);
+    j.kv("b", b);
+    if (!active.db) { j.objEnd(); return j.str(); }
+
+    bool hasResult = hasGamesColumn("Result");
+
+    if (hasResult) {
+        SQLite::Statement stmt(*active.db,
+            "SELECT "
+            "  SUM(CASE WHEN WhiteID=:a AND BlackID=:b AND Result='1-0' THEN 1 ELSE 0 END) AS aWinW,"
+            "  SUM(CASE WHEN WhiteID=:a AND BlackID=:b AND Result='0-1' THEN 1 ELSE 0 END) AS bWinAsBlack,"
+            "  SUM(CASE WHEN WhiteID=:b AND BlackID=:a AND Result='1-0' THEN 1 ELSE 0 END) AS bWinW,"
+            "  SUM(CASE WHEN WhiteID=:b AND BlackID=:a AND Result='0-1' THEN 1 ELSE 0 END) AS aWinAsBlack,"
+            "  SUM(CASE WHEN Result='1/2-1/2' THEN 1 ELSE 0 END) AS draws,"
+            "  COUNT(*) AS total "
+            "FROM Games WHERE (WhiteID=:a AND BlackID=:b) OR (WhiteID=:b AND BlackID=:a)");
+        stmt.bind(":a", a);
+        stmt.bind(":b", b);
+        if (stmt.executeStep()) {
+            auto aWins = stmt.getColumn("aWinW").getInt64() + stmt.getColumn("aWinAsBlack").getInt64();
+            auto bWins = stmt.getColumn("bWinW").getInt64() + stmt.getColumn("bWinAsBlack").getInt64();
+            j.kv("total", stmt.getColumn("total").getInt64());
+            j.kv("aWins", aWins);
+            j.kv("bWins", bWins);
+            j.kv("draws", stmt.getColumn("draws").getInt64());
+        }
+    } else {
+        SQLite::Statement stmt(*active.db,
+            "SELECT COUNT(*) AS total FROM Games "
+            "WHERE (WhiteID=:a AND BlackID=:b) OR (WhiteID=:b AND BlackID=:a)");
+        stmt.bind(":a", a);
+        stmt.bind(":b", b);
+        if (stmt.executeStep()) j.kv("total", stmt.getColumn("total").getInt64());
+    }
+
+    j.key("games");
+    j.arrBegin();
+    {
+        bool hasDate = hasGamesColumn("Date");
+        bool hasEco = hasGamesColumn("ECO");
+        std::string sql = "SELECT ID, WhiteID, BlackID" +
+            std::string(hasDate ? ", Date" : "") + std::string(hasResult ? ", Result" : "") +
+            std::string(hasEco ? ", ECO" : "") +
+            " FROM Games WHERE (WhiteID=:a AND BlackID=:b) OR (WhiteID=:b AND BlackID=:a) "
+            "ORDER BY " + (hasDate ? std::string("Date DESC, ") : std::string()) + "ID DESC LIMIT 50";
+        SQLite::Statement stmt(*active.db, sql);
+        stmt.bind(":a", a);
+        stmt.bind(":b", b);
+        while (stmt.executeStep()) {
+            j.objBegin();
+            j.kv("id", stmt.getColumn("ID").getInt());
+            j.kv("whiteId", stmt.getColumn("WhiteID").getInt());
+            j.kv("blackId", stmt.getColumn("BlackID").getInt());
+            if (hasDate) j.kv("date", stmt.getColumn("Date").getString());
+            if (hasResult) j.kv("result", stmt.getColumn("Result").getString());
+            if (hasEco) j.kv("eco", stmt.getColumn("ECO").getString());
+            j.objEnd();
+        }
+    }
+    j.arrEnd();
+
+    j.objEnd();
+    return j.str();
+}
+
+std::string WebServer::apiEventJson(int id, bool& found) const
+{
+    found = false;
+    Json j;
+    j.objBegin();
+    if (!active.db) { j.objEnd(); return j.str(); }
+
+    {
+        SQLite::Statement stmt(*active.db, "SELECT ID, Name FROM Events WHERE ID = ?");
+        stmt.bind(1, id);
+        if (!stmt.executeStep()) { j.objEnd(); return j.str(); }
+        found = true;
+        j.kv("id", stmt.getColumn("ID").getInt());
+        j.kv("name", stmt.getColumn("Name").getString());
+    }
+
+    j.key("standings");
+    j.arrBegin();
+    if (hasGamesColumn("Result")) {
+        SQLite::Statement stmt(*active.db,
+            "SELECT p.ID, p.Name, COUNT(*) AS games,"
+            "       SUM(CASE WHEN x.outcome = 'W' THEN 1 ELSE 0 END) AS wins,"
+            "       SUM(CASE WHEN x.outcome = 'D' THEN 1 ELSE 0 END) AS draws,"
+            "       SUM(CASE WHEN x.outcome = 'L' THEN 1 ELSE 0 END) AS losses "
+            "FROM ("
+            "  SELECT WhiteID AS pid,"
+            "         CASE Result WHEN '1-0' THEN 'W' WHEN '1/2-1/2' THEN 'D' WHEN '0-1' THEN 'L' END AS outcome"
+            "  FROM Games WHERE EventID = :id"
+            "  UNION ALL"
+            "  SELECT BlackID AS pid,"
+            "         CASE Result WHEN '0-1' THEN 'W' WHEN '1/2-1/2' THEN 'D' WHEN '1-0' THEN 'L' END AS outcome"
+            "  FROM Games WHERE EventID = :id"
+            ") x JOIN Players p ON p.ID = x.pid "
+            "GROUP BY p.ID, p.Name "
+            "ORDER BY (wins + draws * 0.5) DESC, wins DESC, p.Name ASC");
+        stmt.bind(":id", id);
+        while (stmt.executeStep()) {
+            auto wins = stmt.getColumn("wins").getInt64();
+            auto draws = stmt.getColumn("draws").getInt64();
+            j.objBegin();
+            j.kv("id", stmt.getColumn("ID").getInt());
+            j.kv("name", stmt.getColumn("Name").getString());
+            j.kv("games", stmt.getColumn("games").getInt64());
+            j.kv("wins", wins);
+            j.kv("draws", draws);
+            j.kv("losses", stmt.getColumn("losses").getInt64());
+            j.kv("score", static_cast<double>(wins) + 0.5 * static_cast<double>(draws));
+            j.objEnd();
+        }
+    } else {
+        SQLite::Statement stmt(*active.db,
+            "SELECT p.ID, p.Name, COUNT(*) AS games FROM ("
+            "  SELECT WhiteID AS pid FROM Games WHERE EventID = :id"
+            "  UNION ALL"
+            "  SELECT BlackID AS pid FROM Games WHERE EventID = :id"
+            ") x JOIN Players p ON p.ID = x.pid "
+            "GROUP BY p.ID, p.Name ORDER BY games DESC, p.Name ASC");
+        stmt.bind(":id", id);
+        while (stmt.executeStep()) {
+            j.objBegin();
+            j.kv("id", stmt.getColumn("ID").getInt());
+            j.kv("name", stmt.getColumn("Name").getString());
+            j.kv("games", stmt.getColumn("games").getInt64());
+            j.objEnd();
+        }
+    }
+    j.arrEnd();
+
+    j.objEnd();
+    return j.str();
 }
 
 ////////////////////////////////////////////////////////////////////////////
