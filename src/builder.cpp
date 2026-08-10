@@ -147,11 +147,7 @@ void Builder::create()
     transactionCnt = 0;
     for(auto && path : paraRecord.pgnPaths) {
         processPgnFile(path);
-
-        if (transactionCnt > 0) {
-            sendTransaction(false);
-        }
-        transactionCnt = 0;
+        commitPendingTransaction();
     }
 
     // completing
@@ -361,6 +357,29 @@ SQLite::Database* Builder::createDb(const std::string& path, int optionFlag, con
         mDb->exec("DROP TABLE IF EXISTS Comments");
         mDb->exec("CREATE TABLE Comments (ID INTEGER PRIMARY KEY AUTOINCREMENT, GameID INTEGER, Ply INTEGER, Comment TEXT)");
 
+        if (optionFlag & create_flag_parse_eval) {
+            mDb->exec("DROP TABLE IF EXISTS Evals");
+            mDb->exec(
+                "CREATE TABLE Evals (GameID INTEGER, Ply INTEGER, Depth INTEGER, Score INTEGER,"
+                "Mate INTEGER, Nodes INTEGER, TimeMs INTEGER, PRIMARY KEY (GameID, Ply)) WITHOUT ROWID");
+        }
+
+        // Pure static reference data (the ECO code -> opening name table
+        // compiled into the binary, chess.cpp) -- no per-game cost, so
+        // always built, not gated behind an option. Lets /api/game/:id
+        // (server.cpp) show a real name ("Ruy Lopez") instead of just the
+        // bare 3-character code already stored in Games.ECO.
+        mDb->exec("DROP TABLE IF EXISTS Openings");
+        mDb->exec("CREATE TABLE Openings (ECO TEXT PRIMARY KEY, Name TEXT)");
+        {
+            SQLite::Statement stmt(*mDb, "INSERT INTO Openings (ECO, Name) VALUES (?, ?)");
+            for (auto&& ecoName : bslib::ChessBoard::getAllEcoNames()) {
+                stmt.reset();
+                stmt.bind(1, ecoName.first);
+                stmt.bind(2, ecoName.second);
+                stmt.exec();
+            }
+        }
 
         mDb->exec("PRAGMA journal_mode=OFF");
 //        mDb->exec("PRAGMA synchronous=OFF");
@@ -684,9 +703,11 @@ void Builder::processPGNGameWithAThread(ThreadRecord* t, const std::unordered_ma
             t->board->newGame(fenString);
 
             int flag = bslib::BoardCore::ParseMoveListFlag_quick_check;
-            
+
             if (paraRecord.optionFlag & create_flag_discard_comments) {
                 flag |= bslib::BoardCore::ParseMoveListFlag_discardComment;
+            } else if (paraRecord.optionFlag & create_flag_parse_eval) {
+                flag |= bslib::BoardCore::ParseMoveListFlag_parseComment;
             }
 
             bslib::PgnRecord record;
@@ -731,6 +752,23 @@ void Builder::processPGNGameWithAThread(ThreadRecord* t, const std::unordered_ma
                         t->insertCommentStatement->exec();
                         std::lock_guard<std::mutex> dolock(commentMutex);
                         commentCnt++;
+                    }
+
+                    if ((paraRecord.optionFlag & create_flag_parse_eval) && !h->esVec.empty() && !h->esVec.front().empty()) {
+                        if (!t->insertEvalStatement) {
+                            t->insertEvalStatement = new SQLite::Statement(*mDb,
+                                "INSERT INTO Evals (GameID, Ply, Depth, Score, Mate, Nodes, TimeMs) VALUES (?,?,?,?,?,?,?)");
+                        }
+                        auto&& es = h->esVec.front();
+                        t->insertEvalStatement->reset();
+                        t->insertEvalStatement->bind(1, gameID);
+                        t->insertEvalStatement->bind(2, i);
+                        t->insertEvalStatement->bind(3, es.depth);
+                        t->insertEvalStatement->bind(4, es.mating ? 0 : es.score);
+                        t->insertEvalStatement->bind(5, es.mating ? es.score : 0);
+                        t->insertEvalStatement->bind(6, es.nodes);
+                        t->insertEvalStatement->bind(7, es.elapsedInMillisecond);
+                        t->insertEvalStatement->exec();
                     }
                 }
                 
@@ -789,4 +827,13 @@ IDInteger Builder::getNewGameID()
     std::lock_guard<std::mutex> dolock(gameMutex);
     ++gameCnt;
     return gameCnt;
+}
+
+void Builder::commitPendingTransaction()
+{
+    std::lock_guard<std::mutex> dolock(transactionMutex);
+    if (transactionCnt > 0) {
+        sendTransaction(false);
+        transactionCnt = 0;
+    }
 }

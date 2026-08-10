@@ -138,6 +138,19 @@ namespace bslib {
 
         virtual std::string getLastEcoString() const override;
 
+        // The static ECO reference table (chess.cpp) is keyed by exact
+        // position hash and stores "ECO;Name;Variation" per entry --
+        // getLastEcoString() above only ever needed the ECO code, so it
+        // discards Name/Variation. This is pure reference data with no
+        // per-game dependency at all (unlike getLastEcoString(), which
+        // needs a specific game's history), so it's exposed as a static
+        // dump of every distinct ECO code paired with its opening name
+        // (first entry wins for a given code; the per-position Variation
+        // text is intentionally dropped -- see its caller, Builder::
+        // createDb(), builder.cpp, for why: one row per ECO code, not per
+        // exact line).
+        static std::vector<std::pair<std::string, std::string>> getAllEcoNames();
+
     protected:
         bool canRivalCaptureEnpassant() const;
         bool _quickCheck_bishop(int from, int dest, bool checkMiddle) const;

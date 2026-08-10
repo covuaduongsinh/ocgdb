@@ -23,8 +23,9 @@ void PGNRead::processHalfBegin(char* buffer, long len)
     if (!halfBuf) {
         halfBuf = (char*)malloc(halfBlockSz + 16);
     }
-    
+
     memcpy(halfBuf, buffer, len);
+    halfBuf[len] = 0;
     halfBufSz = len;
 }
 
@@ -236,8 +237,9 @@ uint64_t PGNRead::processPgnFile(const std::string& path)
         if (halfBuf) {
             if (halfBufSz > 0) {
                 processDataBlock(halfBuf, halfBufSz, false);
+                pool->wait_for_tasks();
             }
-            
+
             free(halfBuf);
             halfBuf = 0;
         }

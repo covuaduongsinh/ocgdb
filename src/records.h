@@ -76,6 +76,15 @@ enum {
     create_flag_discard_fen             = 1 << 7,
     create_flag_reset_eco               = 1 << 8,
     create_flag_index                   = 1 << 9,
+    // Parse engine-analysis comments ("0.34/18 2.5s ...", TCEC-style
+    // "d=18,n=..." etc. -- see BoardCore::_parseComment*, base.cpp) into
+    // the Evals table (see builder.cpp/addgame.cpp) instead of just
+    // storing them as opaque text. Off by default: it's extra parsing
+    // work on every commented ply, and most PGN comments aren't engine
+    // analysis at all (BoardCore::_parseComment_standard understands
+    // "score/depth time nodes" and quietly no-ops otherwise -- see
+    // EngineScore::empty(), chesstypes.cpp).
+    create_flag_parse_eval               = 1 << 13,
 
     query_flag_print_all                = 1 << 10,
     query_flag_print_fen                = 1 << 11,
@@ -155,6 +164,13 @@ public:
     int8_t* buf = nullptr;
     SQLite::Statement *insertGameStatement = nullptr;
     SQLite::Statement *insertCommentStatement = nullptr;
+    // Lazily created (see Builder::processPGNGameWithAThread(),
+    // builder.cpp, and AddGame::addAGame(), addgame.cpp) only when
+    // create_flag_parse_eval is set -- the Evals table itself only
+    // exists in that case (see Builder::createDb(), builder.cpp), so
+    // preparing this unconditionally would throw against databases that
+    // don't have it.
+    SQLite::Statement *insertEvalStatement = nullptr;
     SQLite::Statement *removeGameStatement = nullptr;
     SQLite::Statement *getGameStatement = nullptr;
     SQLite::Statement *queryComments = nullptr;

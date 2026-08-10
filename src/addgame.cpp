@@ -94,7 +94,8 @@ void AddGame::runTask()
 
     // add games from PGN files
     processPgnFiles(paraRecord.pgnPaths);
-    
+    commitPendingTransaction();
+
     // add games from SQLite databases
     dbRead.addGameInstance = this;
     dbRead.setOptionFlag(paraRecord.optionFlag | query_flag_print_pgn); // for calling extractHeader
@@ -290,9 +291,17 @@ void AddGame::addAGame(const bslib::PgnRecord& record, const std::vector<int8_t>
     if (paraRecord.optionFlag & (create_flag_moves1 | create_flag_moves2)) {
 
         int flag = bslib::BoardCore::ParseMoveListFlag_quick_check;
-        
+
         if (paraRecord.optionFlag & create_flag_discard_comments) {
             flag |= bslib::BoardCore::ParseMoveListFlag_discardComment;
+        } else if ((paraRecord.optionFlag & create_flag_parse_eval) && mDb) {
+            if (!evalsTableChecked) {
+                evalsTableChecked = true;
+                evalsTableExists = DbRead::hasTable(mDb, "Evals");
+            }
+            if (evalsTableExists) {
+                flag |= bslib::BoardCore::ParseMoveListFlag_parseComment;
+            }
         }
 
 //        bslib::PgnRecord record;
@@ -338,8 +347,25 @@ void AddGame::addAGame(const bslib::PgnRecord& record, const std::vector<int8_t>
                     std::lock_guard<std::mutex> dolock(commentMutex);
                     commentCnt++;
                 }
+
+                if (evalsTableExists && !h->esVec.empty() && !h->esVec.front().empty()) {
+                    if (!t->insertEvalStatement) {
+                        t->insertEvalStatement = new SQLite::Statement(*mDb,
+                            "INSERT INTO Evals (GameID, Ply, Depth, Score, Mate, Nodes, TimeMs) VALUES (?,?,?,?,?,?,?)");
+                    }
+                    auto&& es = h->esVec.front();
+                    t->insertEvalStatement->reset();
+                    t->insertEvalStatement->bind(1, gameID);
+                    t->insertEvalStatement->bind(2, i);
+                    t->insertEvalStatement->bind(3, es.depth);
+                    t->insertEvalStatement->bind(4, es.mating ? 0 : es.score);
+                    t->insertEvalStatement->bind(5, es.mating ? es.score : 0);
+                    t->insertEvalStatement->bind(6, es.nodes);
+                    t->insertEvalStatement->bind(7, es.elapsedInMillisecond);
+                    t->insertEvalStatement->exec();
+                }
             }
-            
+
             auto cnt = static_cast<int>(p - t->buf);
             assert(cnt >= plyCount);
             auto bindMoves = (paraRecord.optionFlag & create_flag_moves1) ? ":Moves1" : ":Moves2";

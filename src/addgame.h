@@ -56,11 +56,20 @@ private:
     bool createConvertingIDMap(SQLite::Database* db, const std::string& tableName, IDInteger& cnt, std::map<IDInteger, IDInteger>& theMap);
 
 private:
+    // -o parseeval only writes to Evals (see addAGame(), addgame.cpp) when
+    // the target database already has that table -- -merge appends to an
+    // *existing* database (unlike -create, which always builds Evals
+    // itself when the option is set, see Builder::createDb()), and there
+    // is no schema-migration path here to add a missing table mid-merge.
+    // Checked once, lazily, the first time it matters.
+    bool evalsTableChecked = false, evalsTableExists = false;
+
+private:
     AddGameDbRead dbRead;
-    
+
     IDInteger newGameID = 0;
     bool createMode;
-    
+
     std::map<IDInteger, IDInteger> playerConvertIDMap, eventConvertIDMap, siteConvertIDMap;
 };
 
