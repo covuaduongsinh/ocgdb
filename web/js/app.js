@@ -143,12 +143,18 @@
 
   function updateBanner() {
     const banner = document.getElementById('db-error-banner');
-    if (!banner) return;
-    if (App.infoError) {
-      banner.hidden = false;
-      banner.textContent = window.I18N.t('common.dbNotLoaded');
-    } else {
-      banner.hidden = true;
+    if (banner) {
+      if (App.infoError) {
+        banner.hidden = false;
+        banner.textContent = window.I18N.t('common.dbNotLoaded');
+      } else {
+        banner.hidden = true;
+      }
+    }
+
+    const staleBanner = document.getElementById('db-stale-banner');
+    if (staleBanner) {
+      staleBanner.hidden = !(App.info && App.info.derivedStale);
     }
   }
 
@@ -205,6 +211,12 @@
   // the active database -- otherwise the schema/columns every other view
   // reads from App.info would stay stale until a manual page reload.
   App.reload = () => loadInfo().then(renderRoute);
+
+  // Same /api/info refresh but without re-mounting the current view --
+  // used for silent background polling (e.g. the admin panel's job poll,
+  // to flip the derivedStale banner off once a rebuild job finishes)
+  // where re-rendering mid-poll would interrupt whatever the user is doing.
+  App.refreshInfo = loadInfo;
 
   window.OcgdbApp = App;
   window.OcgdbNav = { navigate, openGameViewer, openModal, closeModal };
