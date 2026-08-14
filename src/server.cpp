@@ -62,6 +62,7 @@
 #include "json.h"
 #include "process.h"
 #include "engine.h"
+#include "dbbackup.h"
 #include "board/funcs.h"
 
 using namespace ocgdb;
@@ -964,6 +965,12 @@ void WebServer::runTask()
             return;
         }
 
+        // Best-effort hot backup before the delete (Admin UX Phase 4,
+        // dbbackup.h) -- throttled internally to at most once per database
+        // per ~hour, so repeated deletes in one sitting don't each pay for
+        // a full-file copy. Never blocks or fails the delete itself.
+        backupIfDue(active.path);
+
         // Close the read-only connection for the duration of the delete --
         // simplest way to guarantee no stale-cached statement/row is read
         // back through it immediately after a structural change, and
@@ -1331,6 +1338,11 @@ std::string WebServer::apiGamesJson(const std::map<std::string, std::string>& pa
     if (sortKey == "date" && hasGamesColumn("Date")) sortCol = "g.Date";
     else if (sortKey == "elo" && hasGamesColumn("WhiteElo")) sortCol = "g.WhiteElo";
     else if (sortKey == "plycount" && hasGamesColumn("PlyCount")) sortCol = "g.PlyCount";
+    else if (sortKey == "white") sortCol = "w.Name";
+    else if (sortKey == "black") sortCol = "b.Name";
+    else if (sortKey == "event") sortCol = "e.Name";
+    else if (sortKey == "eco" && hasGamesColumn("ECO")) sortCol = "g.ECO";
+    else if (sortKey == "result" && hasGamesColumn("Result")) sortCol = "g.Result";
     std::string dir = (getP("dir") == "desc") ? "DESC" : "ASC";
 
     // Keyset pagination (Phase 1.3): "afterId" replaces OFFSET for the
@@ -2432,6 +2444,13 @@ std::string WebServer::adminDatabasesJson() const
 
             int64_t gameCount = -1;
             std::string moveField;
+            // "Health" flags (Admin UX: database health panel) -- same
+            // hasTable()/Info-row checks apiInfoJson() already does for
+            // the single active database, just repeated per registered
+            // row here so the Admin tab can show every database's status
+            // at once, not only whichever one happens to be open.
+            bool hasIndexes = false, hasGameMaterial = false, hasOpeningTree = false,
+                 hasEvals = false, hasOpenings = false, derivedStale = false;
             if (exists) {
                 try {
                     SQLite::Database check(e.path, SQLite::OPEN_READONLY);
@@ -2440,12 +2459,31 @@ std::string WebServer::adminDatabasesJson() const
                               : (sf == SearchField::moves2) ? "Moves2" : "";
                     SQLite::Statement stmt(check, "SELECT Value FROM Info WHERE Name = 'GameCount'");
                     if (stmt.executeStep()) gameCount = stmt.getColumn(0).getInt64();
+
+                    SQLite::Statement idx(check,
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND tbl_name='Games' "
+                        "AND name NOT LIKE 'sqlite_autoindex%'");
+                    if (idx.executeStep()) hasIndexes = idx.getColumn(0).getInt() > 0;
+
+                    hasGameMaterial = DbRead::hasTable(&check, "GameMaterial");
+                    hasOpeningTree = DbRead::hasTable(&check, "OpeningTree");
+                    hasEvals = DbRead::hasTable(&check, "Evals");
+                    hasOpenings = DbRead::hasTable(&check, "Openings");
+
+                    SQLite::Statement stale(check, "SELECT Value FROM Info WHERE Name = 'DerivedStale'");
+                    if (stale.executeStep()) derivedStale = stale.getColumn(0).getString() == "1";
                 } catch (SQLite::Exception&) {
-                    // leave gameCount = -1 / moveField empty; UI treats this as "unreadable"
+                    // leave gameCount = -1 / moveField empty / flags false; UI treats this as "unreadable"
                 }
             }
             j.kv("gameCount", gameCount);
             j.kv("moveField", moveField);
+            j.kv("hasIndexes", hasIndexes);
+            j.kv("hasGameMaterial", hasGameMaterial);
+            j.kv("hasOpeningTree", hasOpeningTree);
+            j.kv("hasEvals", hasEvals);
+            j.kv("hasOpenings", hasOpenings);
+            j.kv("derivedStale", derivedStale);
 
             j.objEnd();
         }

@@ -10,9 +10,13 @@
 (function () {
   const t = () => window.I18N;
 
+  // Kept in sync by hand with kCreateOpts (src/jobs.cpp) and the -o list in
+  // main.cpp's usage text -- every entry here needs an admin.opt.<name>.label
+  // / .desc pair in i18n.js (see taskFieldsHtml()'s 'create' branch below).
   const CREATE_OPTS = [
     'moves', 'moves1', 'moves2', 'acceptnewtags', 'discardcomments',
     'discardsites', 'discardnoelo', 'discardfen', 'reseteco', 'nobot', 'bot', 'index',
+    'parseeval', 'keepvariations',
   ];
 
   let pollTimer = null;
@@ -146,6 +150,7 @@
     panel.innerHTML =
       '<h1>' + t().t('admin.title') + '</h1>' +
       '<div class="admin-status-bar" data-role="status"></div>' +
+      '<div data-role="wizard-entry"></div>' +
 
       '<section class="admin-section">' +
         '<h2>' + t().t('admin.dbSection') + '</h2>' +
@@ -253,7 +258,19 @@
   }
 
   async function refreshStatusAndJobs(panel) {
-    await Promise.all([refreshStatus(panel), refreshJobs(panel)]);
+    // Also refreshes the database list, not just jobs -- so health chips
+    // (index/material/tree/derivedStale) and job status update on the same
+    // cadence, letting a "Tạo ngay" chip flip to done without a manual
+    // reload once the job it started finishes. And the shared /api/info
+    // snapshot (App.refreshInfo, no re-mount) so the cross-tab stale
+    // banner clears live once a rebuild job finishes, without disturbing
+    // whatever the user is doing on this panel.
+    await Promise.all([
+      refreshStatus(panel),
+      refreshJobs(panel),
+      refreshDatabases(panel),
+      window.OcgdbApp && window.OcgdbApp.refreshInfo ? window.OcgdbApp.refreshInfo() : Promise.resolve(),
+    ]);
   }
 
   // ------------------------------------------------------------- status
@@ -297,7 +314,45 @@
     }
   }
 
+  // "Health" chips: which speed-up/derived tables a database already has
+  // (see adminDatabasesJson(), server.cpp, which computes these per row).
+  // Evals/Openings are deliberately not shown here -- unlike index/
+  // material/tree, there's no retrofit task for them (only buildable at
+  // -create time), so a chip with no possible action would just confuse
+  // a non-technical user rather than help them.
+  function healthCellHtml(d) {
+    const chip = (ok, label, feature) => ok
+      ? '<span class="health-chip health-chip-ok">&check; ' + esc(label) + '</span>'
+      : '<span class="health-chip health-chip-missing">' + esc(label) +
+          ' <button type="button" class="health-build-btn" data-act="build-now" data-feature="' + feature +
+          '" data-path="' + esc(d.path) + '">' + t().t('admin.buildNow') + '</button></span>';
+    let html = '<div class="db-health">' +
+      chip(d.hasIndexes, t().t('admin.health.index'), 'index') +
+      chip(d.hasGameMaterial, t().t('admin.health.material'), 'material') +
+      chip(d.hasOpeningTree, t().t('admin.health.tree'), 'tree');
+    if (d.derivedStale) {
+      html += '<span class="health-chip health-chip-stale">' + t().t('admin.health.stale') + '</span>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function renderWizardEntry(panel, dbCount) {
+    const el = panel.querySelector('[data-role="wizard-entry"]');
+    if (!el) return;
+    const empty = dbCount === 0;
+    el.innerHTML = '<div class="admin-wizard-entry' + (empty ? ' admin-wizard-entry-empty' : '') + '">' +
+      (empty ? '<p>' + t().t('admin.wizard.emptyHint') + '</p>' : '') +
+      '<button type="button" class="btn' + (empty ? ' btn-primary' : ' btn-small') + '" data-act="open-wizard">' +
+        t().t('admin.wizard.open') + '</button>' +
+      '</div>';
+    el.querySelector('[data-act="open-wizard"]').addEventListener('click', () => {
+      window.OcgdbAdminWizard.open();
+    });
+  }
+
   function renderDatabases(panel, el, dbs) {
+    renderWizardEntry(panel, dbs.length);
     if (!dbs.length) {
       el.innerHTML = '<div class="panel-empty">' + t().t('admin.noDatabases') + '</div>';
       return;
@@ -307,6 +362,7 @@
       '<th>' + t().t('admin.colGames') + '</th>' +
       '<th>' + t().t('admin.colMoveField') + '</th>' +
       '<th>' + t().t('admin.colSize') + '</th>' +
+      '<th>' + t().t('admin.colHealth') + '</th>' +
       '<th></th>' +
       '</tr></thead><tbody>';
     dbs.forEach((d) => {
@@ -319,6 +375,7 @@
         '<td>' + (d.gameCount >= 0 ? Number(d.gameCount).toLocaleString() : '?') + '</td>' +
         '<td>' + esc(d.moveField || '?') + '</td>' +
         '<td>' + formatBytes(d.sizeBytes) + '</td>' +
+        '<td>' + (d.exists ? healthCellHtml(d) : '') + '</td>' +
         '<td class="admin-db-actions">' +
           (d.isActive
             ? '<span class="badge">' + t().t('admin.active') + '</span>'
@@ -352,6 +409,25 @@
         } catch (err) {
           alert(localizeError(err.message));
           btn.disabled = false;
+        }
+      });
+    });
+    el.querySelectorAll('[data-act="build-now"]').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        btn.disabled = true;
+        btn.textContent = t().t('admin.building');
+        try {
+          await window.OcgdbApi.adminSubmitJob({ task: btn.dataset.feature, db: btn.dataset.path });
+          await refreshJobs(panel);
+          // The job runs in the background (see the Jobs section below) --
+          // this row's chip only flips to "done" once it finishes and the
+          // list is refreshed, same as the rest of this tab's job-driven
+          // actions.
+        } catch (err) {
+          alert(localizeError(err.message));
+          btn.disabled = false;
+          btn.textContent = t().t('admin.buildNow');
         }
       });
     });
@@ -515,8 +591,19 @@
       parts.push(area('pgn', 'pgn', true));
       parts.push(pgnUpload());
       parts.push(text('db', 'dbOut', true));
-      parts.push('<div class="field field-wide"><span>' + t().t('admin.f.opts') + '</span><div class="checkgroup">' +
-        CREATE_OPTS.map((o) => '<label class="chip-check"><input type="checkbox" name="opt_' + o + '" value="' + o + '"> ' + o + '</label>').join('') +
+      // Stacked (not the compact chip-pill style used elsewhere in this
+      // form) specifically because these need room for a plain-language
+      // explanation underneath each one -- a non-technical user has no way
+      // to guess what "acceptnewtags" means from the bare option name alone.
+      parts.push('<div class="field field-wide"><span>' + t().t('admin.f.opts') + '</span><div class="optgroup">' +
+        CREATE_OPTS.map((o) =>
+          '<label class="opt-check">' +
+            '<input type="checkbox" name="opt_' + o + '" value="' + o + '">' +
+            '<span class="opt-check-text">' +
+              '<span class="opt-check-label">' + t().t('admin.opt.' + o + '.label') + '</span>' +
+              '<span class="opt-check-desc muted small">' + t().t('admin.opt.' + o + '.desc') + '</span>' +
+            '</span>' +
+          '</label>').join('') +
         '</div></div>');
       parts.push(num('elo', 'elo'));
       parts.push(num('plycount', 'plycount'));
@@ -838,5 +925,5 @@
     observer.observe(document.body, { childList: true, subtree: true });
   }
 
-  window.OcgdbAdmin = { mount };
+  window.OcgdbAdmin = { mount, localizeError };
 })();

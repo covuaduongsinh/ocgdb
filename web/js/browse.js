@@ -6,6 +6,31 @@
 (function () {
   const t = () => window.I18N;
   const PAGE_SIZE = 25;
+  const PRESET_KEY = 'ocgdbBrowsePreset';
+  const FILTER_FIELDS = [
+    'player', 'white', 'black', 'event', 'site', 'eco', 'result',
+    'minElo', 'maxElo', 'dateFrom', 'dateTo', 'minPly',
+  ];
+  // th column key -> the `sort` value the server understands (apiGamesJson,
+  // src/server.cpp). All eight browse columns are sortable server-side.
+  const SORT_COLS = {
+    colId: 'id', colWhite: 'white', colBlack: 'black', colResult: 'result',
+    colEvent: 'event', colDate: 'date', colEco: 'eco', colPly: 'plycount',
+  };
+
+  function loadPreset() {
+    try {
+      const raw = localStorage.getItem(PRESET_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+
+  function savePreset(form) {
+    const fd = new FormData(form);
+    const data = {};
+    FILTER_FIELDS.forEach((k) => { const v = fd.get(k); if (v) data[k] = v; });
+    localStorage.setItem(PRESET_KEY, JSON.stringify(data));
+  }
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
@@ -31,9 +56,11 @@
   function mount(panel, params) {
     const p = Object.assign({
       offset: '0', white: '', black: '', player: '', event: '', site: '',
-      result: '', eco: '', minElo: '', dateFrom: '', dateTo: '',
-      sort: 'id', dir: 'asc',
+      result: '', eco: '', minElo: '', maxElo: '', dateFrom: '', dateTo: '',
+      minPly: '', sort: 'id', dir: 'asc',
     }, params);
+
+    const hasPreset = !!loadPreset();
 
     panel.innerHTML =
       '<h1>' + t().t('browse.title') + '</h1>' +
@@ -51,21 +78,16 @@
               '<option value="' + r + '"' + (p.result === r ? ' selected' : '') + '>' + r + '</option>').join('') +
           '</select></label>' +
         field('minElo', t().t('browse.minElo'), p.minElo, false, 'number') +
+        field('maxElo', t().t('browse.maxElo'), p.maxElo, false, 'number') +
         field('dateFrom', t().t('browse.dateFrom'), p.dateFrom, false, 'text', '1990-01-01') +
         field('dateTo', t().t('browse.dateTo'), p.dateTo, false, 'text', '2030-12-31') +
-        '<label class="field">' + t().t('browse.sort') +
-          '<select name="sort">' +
-            ['id', 'date', 'elo', 'plycount'].map((s) =>
-              '<option value="' + s + '"' + (p.sort === s ? ' selected' : '') + '>' + t().t('browse.sort' + cap(s)) + '</option>').join('') +
-          '</select></label>' +
-        '<label class="field">' + t().t('browse.dir') +
-          '<select name="dir">' +
-            '<option value="asc"' + (p.dir === 'asc' ? ' selected' : '') + '>' + t().t('browse.dirAsc') + '</option>' +
-            '<option value="desc"' + (p.dir === 'desc' ? ' selected' : '') + '>' + t().t('browse.dirDesc') + '</option>' +
-          '</select></label>' +
+        field('minPly', t().t('browse.minPly'), p.minPly, false, 'number') +
         '<div class="field field-actions">' +
           '<button type="submit" class="btn btn-primary">' + t().t('common.apply') + '</button>' +
           '<button type="button" class="btn" data-act="reset">' + t().t('common.reset') + '</button>' +
+          '<button type="button" class="btn" data-act="save-preset">' + t().t('browse.savePreset') + '</button>' +
+          '<button type="button" class="btn" data-act="load-preset"' + (hasPreset ? '' : ' disabled') + '>' + t().t('browse.loadPreset') + '</button>' +
+          '<span class="preset-saved muted small" data-role="preset-saved" hidden>' + t().t('browse.presetSaved') + '</span>' +
         '</div>' +
       '</form>' +
       '<datalist id="dl-players"></datalist>' +
@@ -86,11 +108,36 @@
       e.preventDefault();
       const next = {};
       new FormData(form).forEach((v, k) => { if (v) next[k] = v; });
+      // The sort/dir controls live on the results table's column headers now
+      // (see renderTable), not in this filter form -- carry the current
+      // sort over so applying a filter doesn't silently reset it to ID asc.
+      if (p.sort && p.sort !== 'id') next.sort = p.sort;
+      if (p.dir && p.dir !== 'asc') next.dir = p.dir;
       next.offset = '0';
       window.OcgdbNav.navigate('browse', next);
     });
     form.querySelector('[data-act="reset"]').addEventListener('click', () => {
+      // Clear the fields directly rather than relying on the resulting
+      // navigate() to re-render the form: if the URL hash has no filter
+      // params yet (e.g. the user typed into a field but never hit Apply),
+      // navigating to the already-current "#browse" hash is a no-op --
+      // location.hash assignment doesn't fire hashchange when unchanged --
+      // so the stale typed values would otherwise stick around.
+      form.querySelectorAll('input[name], select[name]').forEach((el) => { el.value = ''; });
       window.OcgdbNav.navigate('browse', {});
+    });
+    form.querySelector('[data-act="save-preset"]').addEventListener('click', () => {
+      savePreset(form);
+      form.querySelector('[data-act="load-preset"]').disabled = false;
+      const savedEl = form.querySelector('[data-role="preset-saved"]');
+      savedEl.hidden = false;
+      clearTimeout(savedEl._hideTimer);
+      savedEl._hideTimer = setTimeout(() => { savedEl.hidden = true; }, 2500);
+    });
+    form.querySelector('[data-act="load-preset"]').addEventListener('click', () => {
+      const preset = loadPreset();
+      if (!preset) return;
+      window.OcgdbNav.navigate('browse', preset);
     });
 
     loadResults(panel, p);
@@ -104,8 +151,6 @@
       '></label>';
   }
 
-  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
-
   async function loadResults(panel, p) {
     const resultsEl = panel.querySelector('.browse-results');
     const pagerEl = panel.querySelector('.browse-pager');
@@ -113,7 +158,7 @@
     try {
       const data = await window.OcgdbApi.games(Object.assign({}, p, { limit: PAGE_SIZE }));
       warnEl.textContent = data.exactTotal ? '' : t().t('browse.approxTotal');
-      renderTable(resultsEl, data.games);
+      renderTable(resultsEl, data.games, p);
       renderPager(pagerEl, data, p);
     } catch (e) {
       resultsEl.innerHTML = '<div class="panel-error">' + t().t('common.dbNotLoaded') + '</div>';
@@ -121,14 +166,20 @@
     }
   }
 
-  function renderTable(el, games) {
+  function renderTable(el, games, p) {
     if (!games.length) {
       el.innerHTML = '<div class="panel-empty">' + t().t('common.noData') + '</div>';
       return;
     }
     let html = '<div class="table-scroll"><table class="games-table"><thead><tr>' +
       ['colId', 'colWhite', 'colBlack', 'colResult', 'colEvent', 'colDate', 'colEco', 'colPly']
-        .map((k) => '<th>' + t().t('browse.' + k) + '</th>').join('') +
+        .map((k) => {
+          const sortKey = SORT_COLS[k];
+          const active = p.sort === sortKey;
+          const arrow = active ? (p.dir === 'desc' ? ' &#9660;' : ' &#9650;') : '';
+          return '<th><button type="button" class="sort-th' + (active ? ' sort-th-active' : '') +
+            '" data-sort-col="' + sortKey + '">' + t().t('browse.' + k) + arrow + '</button></th>';
+        }).join('') +
       '</tr></thead><tbody>';
     games.forEach((g) => {
       html += '<tr class="game-row" data-id="' + g.id + '">' +
@@ -146,6 +197,13 @@
     el.innerHTML = html;
     el.querySelectorAll('.game-row').forEach((tr) => {
       tr.addEventListener('click', () => window.OcgdbNav.openGameViewer(Number(tr.dataset.id)));
+    });
+    el.querySelectorAll('.sort-th').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const col = btn.dataset.sortCol;
+        const nextDir = (p.sort === col && p.dir === 'asc') ? 'desc' : 'asc';
+        window.OcgdbNav.navigate('browse', Object.assign({}, p, { sort: col, dir: nextDir, offset: '0' }));
+      });
     });
   }
 

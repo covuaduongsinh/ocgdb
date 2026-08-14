@@ -26,9 +26,27 @@ tbody tr:last-child { border-bottom: none; }
 .filters-form .field { flex: 1 1 140px; min-width: 120px; }
 
 .browse-warning { min-height: 1.2em; margin-bottom: 6px; }
+.preset-saved { align-self: center; }
 
 .games-table .game-row { cursor: pointer; }
 .games-table .game-row:hover { background: var(--accent-soft); }
+
+.games-table thead th { padding: 0; }
+.sort-th {
+  display: block;
+  width: 100%;
+  font: inherit;
+  font-weight: 700;
+  background: none;
+  border: none;
+  padding: 8px 10px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+  white-space: nowrap;
+}
+.sort-th:hover { color: var(--accent-strong); }
+.sort-th-active { color: var(--accent-strong); }
 
 .browse-pager {
   display: flex;
@@ -286,6 +304,19 @@ tbody tr:last-child { border-bottom: none; }
 .admin-status-busy { border-color: var(--danger); color: var(--danger); }
 .admin-warning { color: var(--danger); }
 
+.admin-wizard-entry { margin-bottom: 20px; }
+.admin-wizard-entry-empty {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.admin-wizard-entry-empty p { margin: 0; flex: 1 1 260px; }
+
 .admin-section { margin-bottom: 32px; }
 
 .admin-db-toolbar { display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 14px; }
@@ -333,18 +364,45 @@ tbody tr:last-child { border-bottom: none; }
 .field-hint { font-weight: 400; }
 .field-checkbox { flex-direction: row !important; align-items: center; gap: 6px !important; }
 
-.checkgroup { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip-check {
+.optgroup { display: flex; flex-direction: column; gap: 10px; }
+.opt-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+.opt-check input { margin-top: 3px; flex: 0 0 auto; }
+.opt-check-text { display: flex; flex-direction: column; gap: 1px; }
+.opt-check-label { font-weight: 600; font-family: var(--font-mono); font-size: 0.85rem; }
+.opt-check-desc { line-height: 1.3; }
+
+.db-health { display: flex; flex-wrap: wrap; gap: 6px; }
+.health-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 0.8rem;
-  font-weight: 500;
-  border: 1px solid var(--border);
+  font-size: 0.76rem;
+  font-weight: 600;
   border-radius: 999px;
-  padding: 4px 10px;
+  padding: 3px 9px;
+  white-space: nowrap;
+}
+.health-chip-ok { background: var(--accent-soft); color: var(--accent-strong); }
+.health-chip-missing { background: var(--bg-sunken); color: var(--text-muted); }
+.health-chip-stale { background: var(--warning-soft); color: var(--warning); }
+.health-build-btn {
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 1px 8px;
   cursor: pointer;
 }
+.health-build-btn:hover { background: var(--bg-sunken); }
+.health-build-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .admin-upload { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .admin-upload-btn { display: inline-flex; align-items: center; cursor: pointer; }
@@ -417,6 +475,21 @@ tbody tr:last-child { border-bottom: none; }
   margin-bottom: 10px;
 }
 .admin-job-detail-actions { display: flex; gap: 8px; }
+
+/* --------------------------------------------------------------- wizard */
+.wizard-steps { display: flex; gap: 6px; margin-bottom: 14px; }
+.wizard-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--bg-sunken);
+}
+.wizard-step-active { background: var(--accent); color: var(--accent-contrast); font-weight: 700; }
+.admin-wizard .field-wide { width: 100%; }
+.admin-wizard [data-role="path-hint"] { margin: 6px 0 12px; word-break: break-all; }
 
 /* --------------------------------------------------------------- mobile */
 @media (max-width: 640px) {

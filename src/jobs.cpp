@@ -8,6 +8,7 @@
  */
 
 #include "jobs.h"
+#include "dbbackup.h"
 
 #include <filesystem>
 #include <sstream>
@@ -497,6 +498,19 @@ void JobManager::runOne(const QueuedJob& job)
         }
     };
 
+    // Best-effort hot backup before a job that modifies a database in
+    // place (Admin UX Phase 4, dbbackup.h). writeTargetPath is only
+    // populated for "dup" when its "remove" option is set (see
+    // buildJobArgv() above) -- exactly the case that's actually
+    // destructive, so no extra option check is needed here. Deliberately
+    // excludes index/material/tree/optimize: those rebuild derived data in
+    // place and don't destroy anything a backup would need to protect,
+    // and backing up before every one of them would just slow down
+    // routine maintenance for no safety benefit.
+    if (!job.writeTargetPath.empty() && (job.task == "merge" || job.task == "dup")) {
+        backupIfDue(job.writeTargetPath);
+    }
+
     auto child = new ChildProcess();
     {
         std::lock_guard<std::mutex> lk(childMutex);
@@ -565,6 +579,27 @@ void JobManager::runOne(const QueuedJob& job)
 
     bool wasCancelled = (exitCode == -1 && started);
     if (wasCancelled) state = "cancelled";
+
+    // Admin UX: clear the "derived data may be stale" flag a write route
+    // set (WebServer::markDerivedStaleLocked(), server.cpp) once whichever
+    // job just rebuilt one of the derived tables it warns about actually
+    // succeeds. Info.DerivedStale is a single flag, not tracked separately
+    // per table (GameMaterial/OpeningTree/Evals/GameTree) -- clearing it
+    // after any one of index/material/tree finishes is a deliberate
+    // simplification, not an oversight: a precise per-table model is
+    // possible but not worth the complexity for what's meant to be a
+    // "some upkeep task probably wants re-running" nudge, not a hard
+    // guarantee. Best-effort like markDerivedStaleLocked() itself -- never
+    // fails the job over this.
+    if (state == "succeeded" && !job.writeTargetPath.empty() &&
+        (job.task == "index" || job.task == "material" || job.task == "tree")) {
+        try {
+            SQLite::Database wdb(job.writeTargetPath, SQLite::OPEN_READWRITE);
+            wdb.exec("DELETE FROM Info WHERE Name = 'DerivedStale'");
+        } catch (SQLite::Exception&) {
+            // best-effort -- see comment above
+        }
+    }
 
     if (store) store->finishJob(job.id, state, exitCode, errText);
     activeJobId = -1;

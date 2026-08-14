@@ -16,6 +16,8 @@
   --accent-soft: #e3efe7;
   --danger: #b3261e;
   --danger-soft: #fbe9e7;
+  --warning: #8a5a00;
+  --warning-soft: #fbf0da;
   --radius: 10px;
   --radius-sm: 6px;
   --shadow: 0 1px 3px rgba(20, 20, 20, 0.10), 0 4px 14px rgba(20, 20, 20, 0.07);
@@ -178,6 +180,14 @@ code, pre { font-family: var(--font-mono); }
   font-weight: 600;
 }
 
+.db-stale-banner {
+  background: var(--warning-soft);
+  color: var(--warning);
+  padding: 10px 16px;
+  text-align: center;
+  font-weight: 600;
+}
+
 .panel-loading, .panel-error, .panel-empty {
   padding: 24px;
   text-align: center;
@@ -254,7 +264,8 @@ code, pre { font-family: var(--font-mono); }
   outline: 2px solid var(--accent);
   outline-offset: -1px;
 }
-.field-actions { flex-direction: row; align-items: flex-end; gap: 8px; }
+.field-actions { flex: 1 1 100%; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; }
+.field-actions .btn { white-space: nowrap; }
 
 /* ---------------------------------------------------------------- modal */
 .modal-backdrop {
